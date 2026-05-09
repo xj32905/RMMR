@@ -1,36 +1,74 @@
-#include<iostream>
-using namespace std;
-template<swapNum>
-int main(){
-    int a=10;
-    int b=20;
-    int& c=a;
-    c=b;
-    cout<<"a="<<a<<"b="<<b<<endl;
-    cout<<"hello word\n";
-    return 0;
-}
-//1. 语法错误（会直接编译报错）
-template<swapNum>	第 3 行	完全多余的错误写法，笔记里的 template 是泛型模板，这里用不上，直接删掉就行
-cout<<"hello word\n";	第 10 行	word 拼写错误，应该是 world，虽然不影响运行，但最好改对
-2. 逻辑错误
-int& c=a; c=b;	第 7-8 行	想实现交换，但这两句根本做不到交换：c 是 a 的别名，c=b 只是把 b 的值赋值给了 a，结果是 a 和 b 都变成了 20，根本没交换
-没有自定义函数	整个代码	作业明确要求体现「自定义函数」语法点，把所有逻辑都写在 main 里，无法满足要求
-
 #include <iostream>
+#include <string>
 using namespace std;
-void swapNum(int &x, int &y) {
-    int temp = x;
-    x = y;
-    y = temp;
-}
+
+template <typename T>
+class Swapper {
+public:
+void swapNum(T &x, T &y) {
+        T temp = x;
+        x = y;
+        y = temp;
+    }
+
+   
+    void swapNum(T &a, T &b, T &c) {
+        T temp = a;
+        a = b;
+        b = c;
+        c = temp;
+    }
+
+    
+    void swapIfDifferent(T &x, T &y) {
+        if (x != y) {
+            T temp = x;
+            x = y;
+            y = temp;
+        }
+    }
+
+    static void print(const string &msg, const T &a, const T &b) {
+        cout << msg << "a=" << a << " b=" << b << endl;
+    }
+
+    
+    static void print(const string &msg, const T &a, const T &b, const T &c) {
+        cout << msg << "a=" << a << " b=" << b << " c=" << c << endl;
+    }
+};
 
 int main() {
-    int a = 10;
-    int b = 20;
-    cout << "交换前：a=" << a << " b=" << b << endl;
-    swapNum(a, b); // 调用自定义函数
-    cout << "交换后：a=" << a << " b=" << b << endl;
+ 
+    Swapper<int> sw;
+    int a = 10, b = 20;
+    Swapper<int>::print("交换前：", a, b);
+    sw.swapNum(a, b);
+    Swapper<int>::print("交换后：", a, b);
+
+  
+    int c = 30;
+    Swapper<int>::print("三变量交换前：", a, b, c);
+    sw.swapNum(a, b, c);   // 调用重载的三参数版本
+    Swapper<int>::print("三变量交换后：", a, b, c);
+
+  
+    int m = 5, n = 5;
+    Swapper<int>::print("swapIfDifferent 前：", m, n);
+    sw.swapIfDifferent(m, n);   // m == n，不会交换
+    Swapper<int>::print("swapIfDifferent 后：", m, n);
+    int p = 7, q = 8;
+    Swapper<int>::print("swapIfDifferent 前：", p, q);
+    sw.swapIfDifferent(p, q);   // p != q，会交换
+    Swapper<int>::print("swapIfDifferent 后：", p, q);
+
+
+    Swapper<double> sw_d;
+    double x = 1.5, y = 3.7, z = 9.2;
+    Swapper<double>::print("double三变量交换前：", x, y, z);
+    sw_d.swapNum(x, y, z);
+    Swapper<double>::print("double三变量交换后：", x, y, z);
+
     cout << "hello world\n";
     return 0;
 }
