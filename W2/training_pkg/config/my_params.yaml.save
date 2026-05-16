@@ -1,0 +1,3 @@
+talker:
+  ros__parameters:
+    my_param: "hello_from_yaml"
