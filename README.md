@@ -69,38 +69,47 @@
 
     学习了冲突时的 git pull --rebase 处理方式。
 
-###W2
+# ROS2 作业提交 - training_pkg
 
+## 环境与基础概念
+- ROS2 Humble 已安装，turtlesim 运行正常
+- workspace: `/home/xj/town_ws`
+- package: `training_pkg`
+- node: `talker`（发布者）、`listener`（订阅者）
+- topic: `/chatter`（String 类型）
 
-. Package（功能包）
+## 基础通信
+- C++ 节点 talker/listener 已实现
+- 编译命令：`colcon build --packages-select training_pkg`
+- 运行：开两个终端分别执行 `ros2 run training_pkg talker` 和 `ros2 run training_pkg listener`
 
-    是什么：工作空间内的基本组织单元，一个文件夹就是一个包。
+## launch 与参数
+- launch 文件：`launch/talker_listener.launch.py`
+- 参数通过 YAML 文件加载：`config/my_params.yaml`
+- 参数 `my_param` 在 talker 启动时打印，证明生效
+- 运行 launch：`ros2 launch training_pkg talker_listener.launch.py params_file:=/home/xj/town_ws/src/training_pkg/config/my_params.yaml`
 
-    标志文件：package.xml（描述包信息）和 CMakeLists.txt（编译规则）。
+## bag 调试
+- 录制：`ros2 bag record /chatter`
+- 查看信息：`ros2 bag info rosbag2_*`
+- 回放：`ros2 bag play rosbag2_*`（同时运行 listener 接收历史消息）
 
-    作用：将节点、配置文件、依赖等聚合在一起，便于复用。
+## 进阶完成
+- [x] 参数 YAML 文件加载
+- [ ] service / 自定义消息（未做，可选）
 
- Node（节点）
+## 运行方式总结
+```bash
+cd ~/town_ws
+colcon build --packages-select training_pkg
+source install/setup.bash
+ros2 launch training_pkg talker_listener.launch.py params_file:=~/town_ws/src/training_pkg/config/my_params.yaml
+遇到的问题及解决
 
-    是什么：一个可执行程序（C++/Python），是 ROS 中的最小进程单元。
+    编译时找不到 talker.cpp → 修正文件名
 
-    作用：执行具体任务（如控制电机、处理图像）。
+    CMakeLists.txt 拼写错误 → 修正 ament_cmake 等
 
-    特点：
+    launch 找不到文件 → 添加 install(DIRECTORY launch) 到 CMakeLists
 
-        节点之间通过 Topic 或 Service 通信。
-
-        运行时由 rosmaster 管理。
-
-
-4. Topic（话题）
-
-    是什么：节点间异步通信的通道，类似“消息总线”。
-
-    通信模式：发布/订阅（Publisher/Subscriber），一对多。
-
-    数据流：一个节点发布消息到 Topic，订阅该 Topic 的节点自动接收。
-   
-
-
-    
+    gedit 崩溃 → 改用 nano
