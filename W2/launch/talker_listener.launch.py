@@ -9,17 +9,23 @@ def generate_launch_description():
         default_value='',
         description='Path to YAML parameter file'
     )
+    
     talker_node = Node(
         package='training_pkg',
         executable='talker',
         name='talker',
-        parameters=[{'my_param': 'direct_value'}]
+        parameters=[
+            LaunchConfiguration('params_file'),
+            {'my_param': 'direct_value'}
+        ]
     )
+    
     listener_node = Node(
         package='training_pkg',
         executable='listener',
         name='listener'
     )
+    
     return LaunchDescription([
         param_file_arg,
         talker_node,
