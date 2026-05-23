@@ -1,0 +1,415 @@
+import cv2
+import numpy as np
+import os
+from dataclasses import dataclass
+
+IMAGE_PATH = "armor.jpg"
+OUTPUT_DIR = "./output_debug"
+
+# ==================== 自适应亮度检测配置 ====================
+# 【关键修复】大幅降低S(饱和度)阈值,适应严重过曝场景
+# 过曝5000时,灯条几乎变成白色,S值会非常低
+
+# 【关键修复】根据实际诊断结果调整
+# 问题: 3000/5000曝光的图像V值反而更低(11.9/19.6),说明图像更暗!
+# 解决: 降低V阈值,适应极暗环境
+
+# 红色HSV - 降低V阈值到5
+RED_HSV = ((0, 40, 5), (20, 255, 255)), ((160, 40, 5), (180, 255, 255))
+
+# 蓝色HSV - 降低V阈值到5  
+BLUE_HSV = ((100, 50, 5), (140, 255, 255))
+
+# 区域配置
+RED_X_MIN, RED_X_MAX = 0.0, 1.0
+BLUE_X_MIN, BLUE_X_MAX = 0.60, 0.95
+BLUE_Y_MIN, BLUE_Y_MAX = 0.10, 0.42
+
+# 形态学核
+RED_OPEN = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+RED_CLOSE = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+BLUE_OPEN = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+BLUE_CLOSE = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+
+# 【关键修复】大幅扩大面积范围,严重过曝时灯条会非常大
+RED_AREA = (5, 5000)  # 从2000提高到5000
+BLUE_AREA = (5, 5000)  # 从2000提高到5000
+
+# 灯条比例和角度
+RED_RATIO = (2.0, 30.0)
+BLUE_RATIO = (2.0, 35.0)
+RED_ANGLE = 45.0
+BLUE_ANGLE = 45.0
+
+# 配对参数
+RED_PAIR = (5.0, 30, 150, 3.5)  # max_d提高到150
+BLUE_PAIR = (3.0, 30, 150, 3.5)
+RED_ASPECT = (1.5, 4.0)
+BLUE_ASPECT = (1.5, 4.0)
+
+# ================================================
+
+
+@dataclass
+class ArmorPlate:
+    color: str
+    pts: np.ndarray
+
+
+def save_image(name, img):
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    cv2.imwrite(os.path.join(OUTPUT_DIR, name), img)
+
+
+def preprocess_for_bright(img, strong=False):
+    """
+    【增强版】高亮度场景图像预处理
+    使用CLAHE(限制对比度自适应直方图均衡化)增强灯条对比度
+    """
+    if strong:
+        # 严重过曝模式:使用更强的CLAHE参数
+        lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+        l_channel, a_channel, b_channel = cv2.split(lab)
+        
+        # 更强的CLAHE参数
+        clahe = cv2.createCLAHE(clipLimit=4.0, tileGridSize=(6, 6))
+        l_channel = clahe.apply(l_channel)
+        
+        # 合并并转回BGR
+        enhanced_lab = cv2.merge([l_channel, a_channel, b_channel])
+        enhanced_img = cv2.cvtColor(enhanced_lab, cv2.COLOR_LAB2BGR)
+        
+        # 额外添加伽马校正,压缩高亮区域
+        gamma = 0.6
+        inv_gamma = 1.0 / gamma
+        table = np.array([((i / 255.0) ** inv_gamma) * 255 
+                         for i in np.arange(0, 256)]).astype("uint8")
+        enhanced_img = cv2.LUT(enhanced_img, table)
+        
+        return enhanced_img
+    else:
+        # 中等过曝模式:标准CLAHE
+        lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+        l_channel, a_channel, b_channel = cv2.split(lab)
+        
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        l_channel = clahe.apply(l_channel)
+        
+        enhanced_lab = cv2.merge([l_channel, a_channel, b_channel])
+        enhanced_img = cv2.cvtColor(enhanced_lab, cv2.COLOR_LAB2BGR)
+        
+        return enhanced_img
+
+
+def extract_by_hsv(img, color_type):
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    
+    # 【调试】打印HSV统计信息
+    print(f"\n{'='*60}")
+    print(f"  HSV图像统计:")
+    print(f"    H范围: [{hsv[:,:,0].min()}, {hsv[:,:,0].max()}] 平均: {hsv[:,:,0].mean():.1f}")
+    print(f"    S范围: [{hsv[:,:,1].min()}, {hsv[:,:,1].max()}] 平均: {hsv[:,:,1].mean():.1f}")
+    print(f"    V范围: [{hsv[:,:,2].min()}, {hsv[:,:,2].max()}] 平均: {hsv[:,:,2].mean():.1f}")
+    
+    # 【关键修复】三级亮度判断
+    avg_brightness = np.mean(hsv[:,:,2])
+    print(f"  平均亮度(V): {avg_brightness:.1f}")
+    
+    # 【自适应阈值】根据亮度选择三级阈值
+    if avg_brightness > 180:  # 严重过曝(曝光5000)
+        print(f"  [⚠️ 严重过曝] 使用高亮度HSV阈值")
+        red_hsv_ranges = RED_HSV_HIGH
+        blue_hsv = BLUE_HSV_HIGH
+    elif avg_brightness > 130:  # 中等过曝(曝光3000)
+        print(f"  [⚡ 中等过曝] 使用中亮度HSV阈值")
+        red_hsv_ranges = RED_HSV_MID
+        blue_hsv = BLUE_HSV_MID
+    else:  # 正常亮度(曝光1000)
+        print(f"  [✅ 正常亮度] 使用低亮度HSV阈值")
+        red_hsv_ranges = RED_HSV_LOW
+        blue_hsv = BLUE_HSV_LOW
+    
+    print(f"  红色HSV阈值: {red_hsv_ranges}")
+    print(f"  蓝色HSV阈值: {blue_hsv}")
+    
+    # 红色掩码(两个区间)
+    r1 = cv2.inRange(hsv, np.array(red_hsv_ranges[0][0]), np.array(red_hsv_ranges[0][1]))
+    r2 = cv2.inRange(hsv, np.array(red_hsv_ranges[1][0]), np.array(red_hsv_ranges[1][1]))
+    red_mask = cv2.bitwise_or(r1, r2)
+    
+    # 蓝色掩码
+    blue_mask = cv2.inRange(hsv, np.array(blue_hsv[0]), np.array(blue_hsv[1]))
+    
+    # 【调试】打印统计信息
+    print(f"\n  掩码统计:")
+    print(f"    红色掩码非零像素: {np.count_nonzero(red_mask)}")
+    print(f"    蓝色掩码非零像素: {np.count_nonzero(blue_mask)}")
+    print(f"{'='*60}\n")
+    
+    # 【新增】保存各通道掩码用于调试
+    save_image("hsv_h_channel.png", hsv[:,:,0])
+    save_image("hsv_s_channel.png", hsv[:,:,1])
+    save_image("hsv_v_channel.png", hsv[:,:,2])
+    save_image("red_mask_raw.png", red_mask)
+    save_image("blue_mask_raw.png", blue_mask)
+    
+    return red_mask, blue_mask
+
+
+def adaptive_extract(img, color_type):
+    """
+    【核心修复】根据实际亮度自适应
+    """
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    avg_brightness = np.mean(gray)
+    
+    print(f"  平均亮度: {avg_brightness:.1f}")
+    
+    # 【关键修复】根据实际诊断结果调整阈值
+    if avg_brightness > 100:
+        # 较亮场景(如1000曝光, V=45.7对应灰度24.4)
+        print(f"  [较亮场景] 使用标准HSV")
+        mask = extract_by_hsv(img, color_type)
+    else:
+        # 极暗场景(3000/5000曝光, V=11.9/19.6)
+        print(f"  [极暗场景] 使用低阈值HSV")
+        mask = extract_by_hsv(img, color_type)  # HSV阈值已经降低
+    
+    return mask
+
+
+def morph(mask, open_k, close_k):
+    opened = cv2.morphologyEx(mask, cv2.MORPH_OPEN, open_k)
+    closed = cv2.morphologyEx(opened, cv2.MORPH_CLOSE, close_k)
+    print(f"  形态学后非零像素: {np.count_nonzero(closed)}")
+    return closed
+
+
+def find_bars(mask, color, debug_img, x_min_r, x_max_r, min_a, max_a, min_r, max_r, max_ang, img_w, y_min_r=0.0, y_max_r=1.0):
+    cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    bars, draw = [], debug_img.copy() if debug_img is not None else None
+    x_min, x_max = img_w * x_min_r, img_w * x_max_r
+    img_h = mask.shape[0]
+    y_min, y_max = img_h * y_min_r, img_h * y_max_r
+    
+    print(f"  [{color}] 轮廓总数: {len(cnts)}, X范围: [{x_min:.0f}, {x_max:.0f}], Y范围: [{y_min:.0f}, {y_max:.0f}]")
+
+    for idx, c in enumerate(cnts):
+        area = cv2.contourArea(c)
+        if area < min_a or area > max_a:
+            continue
+        rect = cv2.minAreaRect(c)
+        (cx, cy), (w, h), ang = rect
+        if cx < x_min or cx > x_max or cy < y_min or cy > y_max:
+            continue
+        if w >= h:
+            ls, ss, la = w, h, ang
+        else:
+            ls, ss, la = h, w, ang + 90
+        ratio = ls / (ss + 1e-6)
+        av = abs(abs(la) - 90)
+        if av > 90:
+            av = 180 - av
+        if ratio < min_r or ratio > max_r or av > max_ang:
+            continue
+        box = cv2.boxPoints(rect).astype(np.int32)
+        bars.append({"center": np.array([cx, cy]), "box": box, "angle": la, "length": ls})
+        if draw is not None:
+            cv2.drawContours(draw, [box], 0, (0, 255, 0), 2)
+            cv2.putText(draw, f"{idx}:{area:.0f}", tuple(box[0]), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 255), 1)
+
+    if draw is not None:
+        save_image(f"{color}_candidates.png", draw)
+    print(f"  [{color}] 通过筛选的灯条: {len(bars)}")
+    return bars
+
+
+def match(bars, color, debug_img, max_yd, min_d, max_d, max_lr, al, ah):
+    pairs, n = [], len(bars)
+    draw = debug_img.copy() if debug_img is not None else None
+    
+    print(f"  [{color}] 开始配对, 参数: max_yd={max_yd}, min_d={min_d}, max_d={max_d}")
+    
+    for i in range(n):
+        for j in range(i + 1, n):
+            b1, b2 = bars[i], bars[j]
+            
+            # 详细调试信息
+            angle_diff = abs(b1["angle"] - b2["angle"])
+            y_diff = abs(b1["center"][1] - b2["center"][1])
+            dist = np.linalg.norm(b1["center"] - b2["center"])
+            lr = max(b1["length"], b2["length"]) / (min(b1["length"], b2["length"]) + 1e-6)
+            aspect = dist / ((b1["length"] + b2["length"]) / 2 + 1e-6)
+            
+            # 【调试】打印每对的详细信息
+            print(f"    对[{i},{j}]: 角度差={angle_diff:.1f}°, Y差={y_diff:.1f}px, 距离={dist:.1f}px, 长度比={lr:.2f}, 纵横比={aspect:.2f}")
+            print(f"      约束检查: 角度<25? {angle_diff<25}, Y差<{max_yd}? {y_diff<max_yd}, "
+                  f"距离[{min_d},{max_d}]? {min_d<=dist<=max_d}, 长度比<{max_lr}? {lr<max_lr}, "
+                  f"纵横比[{al},{ah}]? {al<=aspect<=ah}")
+            
+            if angle_diff > 25:
+                print(f"      ❌ 角度差过大")
+                continue
+            if y_diff > max_yd:
+                print(f"      ❌ Y方向差异过大")
+                continue
+            if dist < min_d or dist > max_d:
+                print(f"      ❌ 距离不在范围内")
+                continue
+            if lr > max_lr:
+                print(f"      ❌ 长度比例不一致")
+                continue
+            if aspect < al or aspect > ah:
+                print(f"      ❌ 纵横比不符合")
+                continue
+                
+            print(f"      ✅ 配对成功!")
+            left, right = (b1, b2) if b1["center"][0] < b2["center"][0] else (b2, b1)
+            pairs.append((left, right))
+            if draw is not None:
+                cv2.line(draw, tuple(left["center"].astype(int)), tuple(right["center"].astype(int)), (255, 0, 255), 2)
+                
+    if draw is not None and pairs:
+        save_image(f"{color}_pairs.png", draw)
+    print(f"  [{color}] 成功配对: {len(pairs)}")
+    return pairs
+
+
+def filter_duplicate_armors(armors, min_dist=25):  # 修改红色去重阈值为25
+    """
+    【新增】过滤距离过近的重复装甲板检测
+    如果两个装甲板中心点距离小于min_dist,只保留第一个
+    """
+    if len(armors) <= 1:
+        return armors
+    
+    filtered = []
+    used = [False] * len(armors)
+    
+    for i in range(len(armors)):
+        if used[i]:
+            continue
+        
+        center_i = np.mean(armors[i].pts, axis=0)
+        keep = True
+        
+        for j in range(len(armors)):
+            if i == j or used[j]:
+                continue
+            center_j = np.mean(armors[j].pts, axis=0)
+            dist = np.linalg.norm(center_i - center_j)
+            
+            if dist < min_dist:
+                # 距离太近,标记为重复
+                used[j] = True
+                print(f"  [去重] 装甲板{i}和{j}距离{dist:.1f}px < {min_dist}px, 移除第{j}个")
+        
+        if keep:
+            filtered.append(armors[i])
+            used[i] = True
+    
+    print(f"  [去重] {len(armors)} -> {len(filtered)} 个装甲板")
+    return filtered
+
+
+def build(left, right, color):
+    def ends(box):
+        ys = box[:, 1]
+        return box[np.argmin(ys)], box[np.argmax(ys)]
+    lt, lb = ends(left["box"])
+    rt, rb = ends(right["box"])
+    return ArmorPlate(color, np.array([lt, rt, rb, lb], dtype=np.int32))
+
+
+def detect(img, mask, color, open_k, close_k, x_min_r, x_max_r, min_a, max_a, min_r, max_r, max_ang,
+           max_yd, min_d, max_d, max_lr, al, ah, y_min_r=0.0, y_max_r=1.0):
+    h, w = img.shape[:2]
+    print(f"\n[{color.upper()}] 检测开始:")
+    m = morph(mask, open_k, close_k)
+    save_image(f"{color}_morph.png", m)
+    bars = find_bars(m, color, img.copy(), x_min_r, x_max_r, min_a, max_a, min_r, max_r, max_ang, w, y_min_r, y_max_r)
+    pairs = match(bars, color, img.copy(), max_yd, min_d, max_d, max_lr, al, ah)
+    armors = [build(l, r, color) for l, r in pairs]
+    print(f"[{color.upper()}] 最终装甲板: {len(armors)}\n")
+    return armors
+
+
+def draw(img, armors):
+    res = img.copy()
+    for a in armors:
+        c = (0, 0, 255) if a.color == "red" else (255, 0, 0)
+        cv2.polylines(res, [a.pts], True, c, 2)
+        for i, p in enumerate(a.pts):
+            cv2.circle(res, tuple(p), 5, (0, 255, 0), -1)
+            cv2.putText(res, str(i), tuple(p + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        center = np.mean(a.pts, axis=0).astype(int)
+        cv2.putText(res, f"{a.color.upper()} ARMOR", tuple(center - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, c, 2)
+    return res
+
+
+def main():
+    img = cv2.imread(IMAGE_PATH)
+    if img is None:
+        print("无法读取图像")
+        return
+    print(f">>> 处理图像: {img.shape}")
+    print(f">>> 输出目录: {OUTPUT_DIR}\n")
+    
+    # 【关键修复】三级亮度判断与预处理
+    hsv_temp = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    avg_brightness = np.mean(hsv_temp[:,:,2])
+    
+    if avg_brightness > 180:  # 严重过曝
+        print("[预处理] 检测到严重过曝(曝光5000),应用强CLAHE+伽马校正...")
+        img = preprocess_for_bright(img, strong=True)  # 使用强模式
+        save_image("preprocessed.png", img)
+    elif avg_brightness > 130:  # 中等过曝
+        print("[预处理] 检测到中等过曝(曝光3000),应用CLAHE增强...")
+        img = preprocess_for_bright(img, strong=False)  # 使用标准模式
+        save_image("preprocessed.png", img)
+    else:
+        print("[预处理] 低亮度环境,跳过预处理")
+    
+    red_mask, blue_mask = color_sep(img)
+    save_image("red_raw.png", red_mask)
+    save_image("blue_raw.png", blue_mask)
+
+    red = detect(img, red_mask, "red", RED_OPEN, RED_CLOSE, RED_X_MIN, RED_X_MAX,
+                 RED_AREA[0], RED_AREA[1], RED_RATIO[0], RED_RATIO[1], RED_ANGLE,
+                 RED_PAIR[0], RED_PAIR[1], RED_PAIR[2], RED_PAIR[3], RED_ASPECT[0], RED_ASPECT[1])
+
+    blue = detect(img, blue_mask, "blue", BLUE_OPEN, BLUE_CLOSE, BLUE_X_MIN, BLUE_X_MAX,
+                  BLUE_AREA[0], BLUE_AREA[1], BLUE_RATIO[0], BLUE_RATIO[1], BLUE_ANGLE,
+                  BLUE_PAIR[0], BLUE_PAIR[1], BLUE_PAIR[2], BLUE_PAIR[3], BLUE_ASPECT[0], BLUE_ASPECT[1],
+                  BLUE_Y_MIN, BLUE_Y_MAX)
+
+    # 【新增】去重处理
+    print("\n[后处理] 开始去重...")
+    red = filter_duplicate_armors(red, min_dist=30)
+    blue = filter_duplicate_armors(blue, min_dist=40)
+
+    all_armors = red + blue
+    print(f"\n{'='*50}")
+    print(f"完成: {len(all_armors)} 个装甲板")
+    print(f"  红色: {len(red)}")
+    print(f"  蓝色: {len(blue)}")
+    print(f"{'='*50}\n")
+    
+    res = draw(img, all_armors)
+    save_image("final.png", res)
+
+    # 【修复】抑制Qt字体警告
+    import warnings
+    warnings.filterwarnings('ignore')
+    
+    cv2.imshow("red_mask", red_mask)
+    cv2.imshow("blue_mask", blue_mask)
+    cv2.imshow("Result", res)
+    print("按任意键关闭窗口...")
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
+
+
+if __name__ == "__main__":
+    main()
