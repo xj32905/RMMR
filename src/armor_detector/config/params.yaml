@@ -1,0 +1,19 @@
+detector_node:
+  ros__parameters:
+    debug: true
+    gamma: 2.0
+    target_width: 1280
+    blue_h_min: 100
+    blue_h_max: 140
+    red_h_min1: 0
+    red_h_max1: 10
+    red_h_min2: 170
+    red_h_max2: 180
+    s_min: 50
+    v_min: 50
+    v_thresh: 220
+
+camera_node:
+  ros__parameters:
+    video_path: "/home/xj/rm_test/W3/red_1000.mp4"
+    topic: "/camera/image"
