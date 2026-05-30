@@ -1,0 +1,59 @@
+detector_node:
+  ros__parameters:
+    debug: true
+    debug_mode: "result"   # result / red_mask / blue_mask / candidates
+    target_color: "red"    # red / blue / all
+    pick_mode: "lights"    # lights / top2，top2=直接取mask里排序最高的两块
+    pick_rank: "score"     # top2排序：area / length / score，远距离建议score
+    target_width: 1280
+    gamma: 1.0
+    log_interval_ms: 1000
+
+    # color mask 阈值
+    s_min: 70
+    v_min: 70
+    r_thresh_low_h: 0
+    r_thresh_high_h: 10
+    r_thresh_low_h2: 170
+    r_thresh_high_h2: 180
+    b_thresh_low_h: 90
+    b_thresh_high_h: 130
+    morph_close_size: 3
+    morph_open_size: 0
+
+    # 单灯条过滤，红蓝共用
+    min_contour_area: 5.0
+    max_contour_area: 3000.0
+    min_aspect_ratio: 1.0
+    max_angle_error: 90.0
+
+    # 双灯条配对，红蓝共用
+    pair_length_diff: 100.0
+    pair_angle_diff: 60.0
+    pair_min_ratio: 0.3
+    pair_max_ratio: 8.0
+    pair_max_y_diff_ratio: 1.5
+
+camera_node:
+  ros__parameters:
+    # source_type: mvs = 海康/MVS 工业相机；opencv = 普通UVC摄像头或视频文件
+    source_type: "mvs"
+    video_path: ""          # opencv 模式：为空使用 camera_id；非空播放视频
+    camera_id: 0
+    mvs_index: 0             # 多个 MVS 相机时选择第几个
+    mvs_use_gentl: true      # U3V 相机在 Linux 下通常需要 GenTL/cti
+    mvs_cti_path: "/opt/MVS/lib/64/MvProducerU3V.cti"
+    topic: "/camera/image"
+    frame_id: "camera"
+    fps: 60.0
+    loop: true
+    start_frame: 0
+    resize_width: 0
+    paused: false
+
+    # MVS 工业相机现场参数，<=0 表示不主动设置
+    exposure_time: 3000.0
+    gain: 8.0
+    auto_exposure: false
+    auto_gain: false
+    auto_white_balance: false
