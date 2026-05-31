@@ -3,13 +3,11 @@ detector_node:
     debug: true
     debug_mode: "result"   # result / red_mask / blue_mask / candidates
     target_color: "red"    # red / blue / all
-    pick_mode: "lights"    # lights / top2，top2=直接取mask里排序最高的两块
-    pick_rank: "score"     # top2排序：area / length / score，远距离建议score
     target_width: 1280
     gamma: 1.0
     log_interval_ms: 1000
 
-    # color mask 阈值
+    # 1) 颜色分割：只负责把红/蓝区域从图像里抠出来
     s_min: 70
     v_min: 70
     r_thresh_low_h: 0
@@ -21,18 +19,11 @@ detector_node:
     morph_close_size: 3
     morph_open_size: 0
 
-    # 单灯条过滤，红蓝共用
+    # 2) 形态筛选：在 mask 结果里只留下“长条形”区域
     min_contour_area: 5.0
     max_contour_area: 3000.0
-    min_aspect_ratio: 1.0
-    max_angle_error: 90.0
-
-    # 双灯条配对，红蓝共用
-    pair_length_diff: 100.0
-    pair_angle_diff: 60.0
-    pair_min_ratio: 0.3
-    pair_max_ratio: 8.0
-    pair_max_y_diff_ratio: 1.5
+    min_aspect_ratio: 1.5
+    sort_by: "score"       # score=长边*长宽比 / length / area / aspect
 
 camera_node:
   ros__parameters:

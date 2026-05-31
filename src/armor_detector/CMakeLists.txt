@@ -17,8 +17,9 @@ add_executable(camera_node src/camera_node.cpp)
 target_link_libraries(camera_node MvCameraControl)
 ament_target_dependencies(camera_node rclcpp sensor_msgs cv_bridge OpenCV)
 
-# 识别节点
+# 识别节点：ROS IO 在 detector_node.cpp，纯算法在 include/armor_detector/armor_detect_core.hpp
 add_executable(detector_node src/detector_node.cpp)
+target_include_directories(detector_node PRIVATE include)
 ament_target_dependencies(detector_node rclcpp sensor_msgs cv_bridge image_transport OpenCV)
 
 # ===== 新增：海康 MVS 相机节点 =====
