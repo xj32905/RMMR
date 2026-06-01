@@ -62,10 +62,16 @@ struct ColorResult {
     int armors = 0;
 };
 
+struct Armor {
+    std::string color;
+    std::vector<cv::Point> points;  // 左上、右上、右下、左下，用于后续 ROI 裁剪/数字识别
+};
+
 struct Result {
     cv::Mat debug_image;
     ColorResult red;
     ColorResult blue;
+    std::vector<Armor> armors;
 };
 
 class Detector {
@@ -97,11 +103,11 @@ public:
 
         if (p.target_color == "red" || p.target_color == "all") {
             result.red = detectColor(red_mask, p);
-            drawColor(canvas, result.red, true, draw_armor, draw_rejected);
+            drawColor(canvas, result.red, result.armors, true, draw_armor, draw_rejected);
         }
         if (p.target_color == "blue" || p.target_color == "all") {
             result.blue = detectColor(blue_mask, p);
-            drawColor(canvas, result.blue, false, draw_armor, draw_rejected);
+            drawColor(canvas, result.blue, result.armors, false, draw_armor, draw_rejected);
         }
 
         result.debug_image = canvas;
@@ -204,7 +210,8 @@ private:
         return bars;
     }
 
-    void drawColor(cv::Mat& canvas, ColorResult& result, bool is_red, bool draw_armor, bool draw_rejected) const {
+    void drawColor(cv::Mat& canvas, ColorResult& result, std::vector<Armor>& armors,
+                   bool is_red, bool draw_armor, bool draw_rejected) const {
         const cv::Scalar pass_color = is_red ? cv::Scalar(0, 255, 255) : cv::Scalar(255, 255, 0);
         const cv::Scalar fail_color = cv::Scalar(80, 80, 80);
         const cv::Scalar armor_color = is_red ? cv::Scalar(0, 0, 255) : cv::Scalar(255, 0, 0);
@@ -224,25 +231,30 @@ private:
                         b.box.tl() + cv::Point(0, -4), cv::FONT_HERSHEY_SIMPLEX, 0.42, pass_color, 1);
         }
 
-        if (draw_armor && result.bars.size() >= 2) {
-            drawArmor(canvas, result.bars[0].rect, result.bars[1].rect, armor_color, is_red ? "Red Armor" : "Blue Armor");
+        if (result.bars.size() >= 2) {
+            auto quad = armorQuad(result.bars[0].rect, result.bars[1].rect);
             result.armors = 1;
+            armors.push_back({is_red ? "red" : "blue", quad});
+            if (draw_armor) {
+                drawArmor(canvas, quad, armor_color, is_red ? "Red Armor" : "Blue Armor");
+            }
         } else {
             result.armors = 0;
         }
     }
 
-    void drawArmor(cv::Mat& img, const cv::RotatedRect& a, const cv::RotatedRect& b,
-                   const cv::Scalar& color, const std::string& label) const {
+    std::vector<cv::Point> armorQuad(const cv::RotatedRect& a, const cv::RotatedRect& b) const {
         cv::RotatedRect left = a;
         cv::RotatedRect right = b;
         if (left.center.x > right.center.x) std::swap(left, right);
 
         auto le = ends(left);
         auto re = ends(right);
-        std::vector<cv::Point> quad = {
-            toPoint(le.first), toPoint(re.first), toPoint(re.second), toPoint(le.second)
-        };
+        return {toPoint(le.first), toPoint(re.first), toPoint(re.second), toPoint(le.second)};
+    }
+
+    void drawArmor(cv::Mat& img, const std::vector<cv::Point>& quad,
+                   const cv::Scalar& color, const std::string& label) const {
         cv::polylines(img, quad, true, color, 2);
         cv::putText(img, label, quad[0] + cv::Point(0, -8), cv::FONT_HERSHEY_SIMPLEX, 0.55, color, 2);
     }

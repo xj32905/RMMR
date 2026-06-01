@@ -30,4 +30,7 @@ ament_target_dependencies(mvs_camera_node rclcpp sensor_msgs cv_bridge OpenCV)
 install(TARGETS camera_node detector_node mvs_camera_node
         DESTINATION lib/${PROJECT_NAME})
 
+install(DIRECTORY launch config
+        DESTINATION share/${PROJECT_NAME})
+
 ament_package()

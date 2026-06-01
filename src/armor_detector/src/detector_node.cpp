@@ -7,6 +7,7 @@
 #include <armor_detector/armor_detect_core.hpp>
 
 #include <algorithm>
+#include <sstream>
 #include <string>
 
 class ArmorDetectorNode : public rclcpp::Node {
@@ -83,21 +84,40 @@ private:
 
             auto p = readParams();
             auto result = detector_.detect(img, p);
-            auto text = detector_.summary(result, p);
+            auto summary = detector_.summary(result, p);
+            auto text = formatResult(result);
 
             std_msgs::msg::String out;
             out.data = text;
             result_pub_->publish(out);
-            log(text);
+            log(summary);
 
             if (!debug_ || result.debug_image.empty()) return;
             cv::Mat debug_img = result.debug_image;
             if (debug_img.channels() == 1) cv::cvtColor(debug_img, debug_img, cv::COLOR_GRAY2BGR);
-            drawHud(debug_img, text);
+            drawHud(debug_img, summary);
             debug_pub_->publish(*cv_bridge::CvImage(msg->header, "bgr8", debug_img).toImageMsg());
         } catch (const std::exception& e) {
             RCLCPP_ERROR(get_logger(), "detector_node error: %s", e.what());
         }
+    }
+
+    std::string formatResult(const armor_detect::Result& result) const {
+        std::ostringstream oss;
+        oss << "{\"detected\":" << (result.armors.empty() ? "false" : "true") << ",\"armors\":[";
+        for (size_t i = 0; i < result.armors.size(); ++i) {
+            const auto& armor = result.armors[i];
+            if (i > 0) oss << ",";
+            oss << "{\"color\":\"" << armor.color << "\",\"points\":[";
+            for (size_t j = 0; j < armor.points.size(); ++j) {
+                const auto& pt = armor.points[j];
+                if (j > 0) oss << ",";
+                oss << "[" << pt.x << "," << pt.y << "]";
+            }
+            oss << "]}";
+        }
+        oss << "]}";
+        return oss.str();
     }
 
     void drawHud(cv::Mat& img, const std::string& text) {
