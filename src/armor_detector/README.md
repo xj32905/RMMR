@@ -1,96 +1,67 @@
 # armor_detector
 
-ROS2 装甲板检测包。当前版本用于真实相机现场调参和后续数字识别接入。
+ROS2 装甲板检测包。基于 HSV 颜色分割 + 形态学筛选 + 几何配对，从图像中检测 RoboMaster 装甲板灯条并输出四点坐标。
 
-## 1. 功能
-
-- 订阅图像话题 `/camera/image`
-- 基于 HSV 颜色分割检测红色/蓝色装甲板灯条
-- 通过面积和长宽比筛选长条灯条
-- 对候选灯条排序，取前两根组成装甲板四边形
-- 发布检测结果 `/armor_result`
-- 发布调试图像 `/armor/debug_image`
-- 支持 MVS 工业相机、OpenCV 摄像头/视频输入
-
-当前检测链路保持简单：
+## 1. 目录结构
 
 ```text
-red_mask / blue_mask
-  -> findContours
-  -> boundingRect 面积过滤
-  -> 长宽比过滤，筛出长条灯条
-  -> 按 score / length / area / aspect 排序
-  -> 取排序最高的两根
-  -> 用两根长条上下端点画装甲板四边形
-```
-
-## 2. 目录结构
-
-```text
-armor_detector/
-├── CMakeLists.txt
-├── package.xml
+src/armor_detector/
+├── CMakeLists.txt                          # 编译配置
+├── package.xml                             # 包元信息
+├── README.md                               # 本文件
 ├── config/
-│   └── params.yaml
+│   └── params.yaml                         # 所有可调参数入口
 ├── launch/
-│   └── detector.launch.py
+│   └── detector.launch.py                  # 一键启动脚本
 ├── include/
 │   └── armor_detector/
-│       └── armor_detect_core.hpp
+│       ├── armor_detect_core.hpp           # 纯 OpenCV 检测算法（不依赖 ROS）
+│       └── onnx_classifier.hpp             # ONNX 数字识别分类器（不依赖 ROS）
 └── src/
-    ├── camera_node.cpp
-    ├── detector_node.cpp
-    └── mvs_camera_node.cpp
+    ├── detector_node.cpp                   # ROS 检测节点（订阅图像 + 调用算法 + 发布结果）
+    ├── camera_node.cpp                     # 图像源节点（MVS 工业相机 / USB 摄像头 / 视频文件）
+    └── mvs_camera_node.cpp                 # [备用] 海康 MVS 相机节点精简版
 ```
 
-## 3. 检测逻辑和节点逻辑分工
+## 2. 架构设计
 
-### `include/armor_detector/armor_detect_core.hpp`
-
-纯 C++ / OpenCV 检测核心，不依赖 ROS。
-
-输入：
-
-```cpp
-cv::Mat
-armor_detect::Params
+```
+┌──────────────────────┐      ┌─────────────────────────────┐
+│   camera_node        │      │   detector_node              │
+│                      │──┐   │                              │
+│ MVS/USB/Video →      │  │   │  /camera/image → cv::Mat     │
+│ /camera/image        │  │   │       ↓                      │
+└──────────────────────┘  │   │  readParams() → Params       │
+                           └──>│       ↓                      │
+                               │  Detector::detect()          │
+                               │       ↓                      │
+                               │  [W7] OnnxClassifier         │
+                               │   ROI crop + classify        │
+                               │       ↓                      │
+                               │  /armor_result (JSON)        │
+                               │  /armor/debug_image (+label) │
+                               └──────────────────────────────┘
 ```
 
-输出：
+**算法/ROS 完全分离：**
+- `armor_detect_core.hpp`：纯 C++/OpenCV，输入 `cv::Mat` + `Params` → 输出 `Result`（颜色、四点坐标、调试图像）。不依赖 ROS，可独立用于图片/视频/bag/相机。
+- `detector_node.cpp`：ROS2 节点，只负责订阅图像、读取参数、调用检测核心、发布结果。
 
-```cpp
-armor_detect::Result
-```
+## 3. 代码分层原则
 
-其中包含：
-
-- 红/蓝轮廓数量
-- 候选灯条数量
-- 装甲板颜色
-- 装甲板四个角点
-- 调试图像
-
-### `src/detector_node.cpp`
-
-ROS2 包装节点，只负责：
-
-- 声明和读取参数
-- 订阅 `/camera/image`
-- 将 ROS 图像转为 `cv::Mat`
-- 调用 `armor_detect::Detector`
-- 发布 `/armor_result`
-- 发布 `/armor/debug_image`
-- 输出节流日志
+所有检测算法逻辑在 `armor_detect::Detector` 类中，**禁止将算法代码写入 ROS 回调函数**。新增检测功能请修改 `armor_detect_core.hpp`，新增 ROS 功能请修改 `detector_node.cpp`。
 
 ## 4. 依赖
 
-- ROS2 Humble
-- OpenCV
-- cv_bridge
-- image_transport
-- MVS SDK，可选，用于海康/MVS 工业相机
+| 依赖 | 版本要求 | 用途 |
+|------|---------|------|
+| ROS2 | Humble | 基础框架 |
+| OpenCV | ≥4.5 | 图像处理 |
+| cv_bridge | Humble | ROS ↔ OpenCV 图像转换 |
+| image_transport | Humble | 图像传输 |
+| MVS SDK | ≥2.0 | 海康工业相机（可选，USB 摄像头模式不需要） |
 
-MVS SDK 典型路径：
+MVS SDK 安装路径（如不使用 MVS 相机可忽略）：
 
 ```text
 /opt/MVS/include/MvCameraControl.h
@@ -99,8 +70,6 @@ MVS SDK 典型路径：
 
 ## 5. 编译
 
-由于工作区中可能存在重复包名，建议只编译当前包：
-
 ```bash
 cd /home/xj/rm_test
 source /opt/ros/humble/setup.bash
@@ -108,187 +77,240 @@ colcon build --base-paths src/armor_detector --packages-select armor_detector --
 source install/setup.bash
 ```
 
-## 6. 一键启动
+## 6. 启动
+
+### 6.1 真实相机模式（默认）
 
 ```bash
-cd /home/xj/rm_test
-source /opt/ros/humble/setup.bash
-source install/setup.bash
 ros2 launch armor_detector detector.launch.py
 ```
 
-`launch/detector.launch.py` 会启动：
+等价于：
 
-- `camera_node`
-- `detector_node`
-
-并加载：
-
-```text
-config/params.yaml
+```bash
+ros2 launch armor_detector detector.launch.py use_bag:=false
 ```
 
-## 7. 输入输出话题
+### 6.2 Bag 回放模式
 
-### 输入
-
-```text
-/camera/image    sensor_msgs/msg/Image
+```bash
+ros2 launch armor_detector detector.launch.py use_bag:=true bag_path:=/path/to/your/bag
 ```
 
-### 输出
+该命令会自动执行 `ros2 bag play` + 启动 `detector_node`，不启动 `camera_node`。
 
-```text
-/armor_result        std_msgs/msg/String
-/armor/debug_image   sensor_msgs/msg/Image
+### 6.3 调试开关
+
+```bash
+# 关闭调试图像（减少带宽）
+ros2 launch armor_detector detector.launch.py debug:=false
+
+# 只看红色 mask
+ros2 launch armor_detector detector.launch.py debug_mode:=red_mask
+
+# 看候选灯条
+ros2 launch armor_detector detector.launch.py debug_mode:=candidates
+
+# 完整参数覆盖
+ros2 launch armor_detector detector.launch.py debug:=true debug_mode:=result
 ```
 
-`/armor_result` 使用 JSON 风格字符串，包含颜色和四个角点：
+### 6.4 W7 ONNX 数字识别预接入
+
+ONNX 数字识别接口已预接入，默认关闭。待 `tiny_resnet.onnx` 模型文件、输入尺寸、类别顺序和预处理方式确认后，再启用 `onnx_enabled:=true` 进行实测。
+
+```bash
+# 预接入启动示例（需先确认 tiny_resnet.onnx 和模型元数据）
+ros2 launch armor_detector detector.launch.py onnx_enabled:=true onnx_model_path:=/path/to/tiny_resnet.onnx
+```
+
+### 6.5 运行时调参
+
+```bash
+ros2 param set /detector_node target_color blue
+ros2 param set /detector_node debug_mode red_mask
+ros2 param set /detector_node pair_validation true
+```
+
+### 6.5 单独运行节点（高级）
+
+```bash
+# 只启动检测节点（需要已有 /camera/image 话题）
+ros2 run armor_detector detector_node --ros-args --params-file install/armor_detector/share/armor_detector/config/params.yaml
+
+# 相机节点用 OpenCV 播放视频
+ros2 run armor_detector camera_node --ros-args -p source_type:=opencv -p video_path:=/path/to/video.mp4
+```
+
+## 7. 话题
+
+| 话题 | 类型 | 方向 | 说明 |
+|------|------|------|------|
+| `/camera/image` | `sensor_msgs/msg/Image` | 输入 | 相机图像流 |
+| `/armor_result` | `std_msgs/msg/String` | 输出 | 检测结果 JSON |
+| `/armor/debug_image` | `sensor_msgs/msg/Image` | 输出 | 调试标注图像 |
+
+### `/armor_result` 格式
+
+检测到装甲板：
 
 ```json
-{"detected":true,"armors":[{"color":"blue","points":[[312,185],[420,188],[418,260],[310,258]]}]}
+{"detected":true,"armors":[{"color":"red","points":[[258,180],[368,180],[368,300],[258,300]]}]}
 ```
 
-未检测到时：
+未检测到：
 
 ```json
 {"detected":false,"armors":[]}
 ```
 
-四点顺序为：
+四点顺序：**左上 → 右上 → 右下 → 左下**，可用于后续数字 ROI 裁剪。
+
+## 8. 检测链路
 
 ```text
-左上、右上、右下、左下
+BGR 图像
+  → 缩放 + Gamma 校正
+  → HSV 色彩空间转换
+  → Red Mask / Blue Mask（inRange，两套 HSV 阈值）
+  → 形态学操作（闭运算 / 开运算）
+  → findContours → boundingRect
+  → 灯条筛选：面积 + 长宽比 + 排序
+  → TOP2 候选灯条
+  → [可选] 几何配对验证（pair_validation=true）
+  → 装甲板四点输出
 ```
 
-该格式后续可用于裁剪数字 ROI 并接入数字分类模型。
+## 9. 参数配置入口
 
-## 8. 参数入口
+所有参数集中在 `config/params.yaml`，分三大类：
 
-主要参数在：
+### 9.1 颜色分割（HSV）
 
-```text
-config/params.yaml
-```
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `s_min` | 70 | S 通道下限 |
+| `v_min` | 70 | V 通道下限 |
+| `r_thresh_low_h` / `r_thresh_high_h` | 0 / 10 | 红色 H 区间1 |
+| `r_thresh_low_h2` / `r_thresh_high_h2` | 170 / 180 | 红色 H 区间2 |
+| `b_thresh_low_h` / `b_thresh_high_h` | 90 / 130 | 蓝色 H 区间 |
+| `morph_close_size` | 3 | 闭运算核大小 |
+| `morph_open_size` | 0 | 开运算核大小（0=关闭） |
 
-常用检测参数：
+### 9.2 灯条筛选
 
-```yaml
-target_color: "red"      # red / blue / all
-debug_mode: "result"     # result / red_mask / blue_mask / candidates
-s_min: 70
-v_min: 70
-r_thresh_low_h: 0
-r_thresh_high_h: 10
-r_thresh_low_h2: 170
-r_thresh_high_h2: 180
-b_thresh_low_h: 90
-b_thresh_high_h: 130
-morph_close_size: 3
-morph_open_size: 0
-min_contour_area: 5.0
-max_contour_area: 3000.0
-min_aspect_ratio: 1.5
-sort_by: "score"
-```
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `min_contour_area` | 5.0 | 最小 boundingRect 面积 |
+| `max_contour_area` | 3000.0 | 最大 boundingRect 面积 |
+| `min_aspect_ratio` | 1.5 | 最小长宽比 |
+| `sort_by` | score | 排序依据: score / length / area / aspect |
 
-现场可运行时调参，例如：
+### 9.3 装甲板配对
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `pair_validation` | false | false=TOP2直接配对; true=启用几何配对验证 |
+
+几何验证阈值硬编码在 `armor_detect_core.hpp` 的 `validatePair()` 中，基于装甲板物理约束：
+
+| 约束项 | 硬编码值 | 说明 |
+|--------|---------|------|
+| 长度差 | < 长边的 60% | 两根灯条长度应接近 |
+| 角度差 | < 30° | 两根灯条应近似平行 |
+| 中心距比例 | [0.5, 5.0] × 平均长度 | 间距不能太近或太远 |
+| y 偏移 | < 1.0 × 平均长度 | 垂直方向应接近 |
+
+### 9.4 W6 严格灯条筛选
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `strict_lightbar_filter` | false | true=额外校验角度+填充率，过滤背景伪灯条 |
+
+校验项硬编码在 `findBars()` 中：
+
+| 校验项 | 硬编码值 | 说明 |
+|--------|---------|------|
+| 角度约束 | 长边偏离垂直 ±25° | 装甲板灯条竖直安装 |
+| 填充率 | > 0.3 | contourArea / boundingRectArea，真灯条为实心矩形 |
+
+### 9.5 W7 ONNX 数字识别
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `onnx_enabled` | false | true=启用 ONNX 数字识别 |
+| `onnx_model_path` | "" | `tiny_resnet.onnx` 模型文件路径 |
+
+启用后 `/armor_result` JSON 预期会增加 `digit` 和 `confidence` 字段，调试图像上标注数字标签。当前仅为接口预接入，尚未用真实 `tiny_resnet.onnx` 完成验证。
+
+当前预处理实现：灰度单通道 → 等比缩放 → 黑底填充 32×32 → 像素归一化 [0,1]。
+当前标签映射占位：0:one, 1:two, 2:three, 3:four, 4:five, 5:sentry, 6:outpost, 7:base, 8:not_armor。实际使用前需以模型训练配置为准。
+
+## 10. Bag / 相机切换步骤
+
+### 相机 → Bag 切换
+
+1. 准备 bag 文件，确保包含 `/camera/image` 话题
+2. 启动 bag 模式：
 
 ```bash
-ros2 param set /detector_node target_color blue
-ros2 param set /detector_node debug_mode blue_mask
-ros2 param set /detector_node b_thresh_low_h 85
-ros2 param set /detector_node b_thresh_high_h 140
-ros2 param set /detector_node debug_mode candidates
-ros2 param set /detector_node min_aspect_ratio 1.2
-ros2 param set /detector_node debug_mode result
+ros2 launch armor_detector detector.launch.py use_bag:=true bag_path:=/path/to/bag
 ```
 
-## 9. 调试图像
-
-打开调试图像：
+### Bag → 相机切换
 
 ```bash
-ros2 run rqt_image_view rqt_image_view
-```
-
-选择话题：
-
-```text
-/armor/debug_image
-```
-
-调试模式：
-
-```text
-red_mask      只看红色 mask
-blue_mask     只看蓝色 mask
-candidates    看候选灯条和过滤原因
-result        看最终装甲板四边形
-```
-
-`candidates` 模式会显示：
-
-- 通过筛选的 TOP1/TOP2 候选灯条
-- 被过滤轮廓及原因：`SMALL`、`BIG`、`R<`
-
-## 10. 真实相机输入
-
-默认使用 MVS 工业相机：
-
-```yaml
-camera_node:
-  ros__parameters:
-    source_type: "mvs"
-    mvs_use_gentl: true
-    mvs_cti_path: "/opt/MVS/lib/64/MvProducerU3V.cti"
-```
-
-启动：
-
-```bash
+# 直接启动相机模式（默认）
 ros2 launch armor_detector detector.launch.py
 ```
 
-如果没有连接相机，可能出现：
-
-```text
-MVS 未找到相机
-图像源打开失败：source_type=mvs
-```
-
-这是未连接相机或 MVS Viewer 占用设备时的常见现象。
-
-## 11. 视频和 bag 输入
-
-### OpenCV 视频输入
+### Bag 话题是 `/image_raw` 的情况
 
 ```bash
-ros2 run armor_detector camera_node --ros-args -p source_type:=opencv -p video_path:=/path/to/video.mp4 -p loop:=true
+# 先播放 bag（带 remap）
+ros2 bag play /path/to/bag --remap /image_raw:=/camera/image
+
+# 另一个终端启动检测节点
+ros2 run armor_detector detector_node --ros-args --params-file install/armor_detector/share/armor_detector/config/params.yaml
 ```
 
-### bag 输入
+## 11. 已知问题与后续计划
 
-检测节点只要求有图像话题输入到 `/camera/image`。
+### 当前缺陷
 
-如果 bag 中已经包含 `/camera/image`：
+1. **背景误检**：场地红/蓝色长条形物体会通过 HSV + 长宽比筛选，产生伪灯条。W6 已加入 `strict_lightbar_filter`（角度+填充率）和 `pair_validation`（几何配对验证），需真实场景验证效果。
+2. **远距离漏检**：远距离灯条在图像中很小（<5px），mask 中只有 1~2 像素宽，`contourArea` 接近零，依赖 `boundingRect` 面积。
+3. **光照敏感**：过曝/低照度场景下 HSV mask 可能失效，需要调节曝光或 S/V 阈值。
+4. **JSON 格式输出**：`/armor_result` 使用 `std_msgs/msg/String` JSON 文本，非自定义 msg，不便与其他节点集成。
+5. **ONNX 待验证**：ONNX 数字识别接口已预接入，默认关闭；待 `tiny_resnet.onnx` 模型文件、输入尺寸、类别顺序和预处理方式确认后，再启用实测。
+
+### W6 状态（已完成本轮真实相机调试）
+
+- 方向：**真实相机下检测稳定性与背景/面积过滤问题**
+- 已做：通过 `red_mask`、`candidates`、`result` 三种模式采集截图证据
+- 已定位：`max_contour_area=3000.0` 时，清晰红色区域可能被标记为 `BIG`
+- 已调整：`max_contour_area` 提高到 `50000.0`，恢复 result 模式输出
+- 后续：拿到标准装甲板后继续确认最终稳定参数
+
+### W7 状态（预接入，未完成实测）
+
+- ONNX 数字识别接口已预接入（`onnx_classifier.hpp` + `detector_node.cpp` 集成），默认关闭
+- 待做：确认 `tiny_resnet.onnx`、输入尺寸、类别顺序、预处理方式 → `onnx_enabled:=true` → 真实效果验证 → 错误案例分析
+
+## 12. 运行截图与调试
+
+查看调试图像：
 
 ```bash
-ros2 bag play /path/to/bag
-ros2 run armor_detector detector_node --ros-args --params-file /home/xj/rm_test/install/armor_detector/share/armor_detector/config/params.yaml
+ros2 run rqt_image_view rqt_image_view
+# 选择话题: /armor/debug_image
 ```
 
-如果 bag 中图像话题是 `/image_raw`，使用 remap：
+调试模式说明：
 
-```bash
-ros2 bag play /path/to/bag
-ros2 run armor_detector detector_node --ros-args --remap /camera/image:=/image_raw --params-file /home/xj/rm_test/install/armor_detector/share/armor_detector/config/params.yaml
-```
-
-## 12. 已知问题
-
-- 当前 `/armor_result` 使用 `std_msgs/msg/String` 的 JSON 风格文本输出，后续可替换为自定义 msg。
-- 当前检测逻辑是现场调参版，重点保持链路简单，没有使用复杂灯条配对规则。
-- 远距离或过暗灯条依赖 HSV、曝光和 `min_aspect_ratio` 参数调节。
-- MVS 相机需要正确安装 SDK，并避免被 MVS Viewer 占用。
-- 后续数字识别需要基于四点结果裁剪 ROI，再接入 `tiny_resnet.onnx`。
+| debug_mode | 显示内容 |
+|------------|---------|
+| `result` | 最终装甲板四边形 + HUD 文字 |
+| `red_mask` | 红色 HSV mask |
+| `blue_mask` | 蓝色 HSV mask |
+| `candidates` | 候选灯条标注 + 被拒绝轮廓及原因 |

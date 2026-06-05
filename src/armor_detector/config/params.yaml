@@ -21,9 +21,19 @@ detector_node:
 
     # 2) 形态筛选：在 mask 结果里只留下“长条形”区域
     min_contour_area: 5.0
-    max_contour_area: 3000.0
+    max_contour_area: 50000.0
     min_aspect_ratio: 1.5
     sort_by: "score"       # score=长边*长宽比 / length / area / aspect
+
+    # 3) 装甲板配对：几何验证开关（阈值基于物理约束硬编码，W6 按需开启）
+    pair_validation: false   # false=TOP2直接配对, true=启用几何配对验证过滤伪灯条
+
+    # 4) W6 严格灯条筛选：角度约束+填充率校验，过滤背景伪灯条
+    strict_lightbar_filter: false  # false=仅面积+长宽比, true=额外校验角度+填充率
+
+    # 5) W7 ONNX 数字识别（可选）
+    onnx_enabled: false           # true=启用 ONNX 数字识别
+    onnx_model_path: ""           # tiny_resnet.onnx 模型路径
 
 camera_node:
   ros__parameters:

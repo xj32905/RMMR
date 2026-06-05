@@ -34,6 +34,9 @@ struct Params {
     double min_contour_area = 5.0;
     double max_contour_area = 3000.0;
     double min_aspect_ratio = 1.5;
+
+    bool pair_validation = false;         // W5: true=启用几何配对验证
+    bool strict_lightbar_filter = false;  // W6: true=启用灯条角度+填充率校验（防背景误检）
 };
 
 struct Bar {
@@ -103,11 +106,11 @@ public:
 
         if (p.target_color == "red" || p.target_color == "all") {
             result.red = detectColor(red_mask, p);
-            drawColor(canvas, result.red, result.armors, true, draw_armor, draw_rejected);
+            drawColor(canvas, result.red, result.armors, true, draw_armor, draw_rejected, p);
         }
         if (p.target_color == "blue" || p.target_color == "all") {
             result.blue = detectColor(blue_mask, p);
-            drawColor(canvas, result.blue, result.armors, false, draw_armor, draw_rejected);
+            drawColor(canvas, result.blue, result.armors, false, draw_armor, draw_rejected, p);
         }
 
         result.debug_image = canvas;
@@ -191,6 +194,28 @@ private:
                 continue;
             }
 
+            // W6: 严格灯条筛选 —— 角度约束 + 填充率校验（默认关闭）
+            if (p.strict_lightbar_filter) {
+                cv::RotatedRect rect = cv::minAreaRect(contour);
+                // 角度约束：装甲板灯条竖直安装，长边应接近垂直（±25°）
+                float ww = rect.size.width, hh = rect.size.height;
+                float long_angle = (ww >= hh) ? rect.angle : rect.angle + 90.0f;
+                if (long_angle < 0.0f) long_angle += 180.0f;
+                if (long_angle > 90.0f) long_angle = 180.0f - long_angle;
+                float angle_from_vertical = std::abs(long_angle);
+                if (angle_from_vertical > 25.0f) {
+                    rejected.push_back({box, area, length, width, aspect, "ANGL"});
+                    continue;
+                }
+                // 填充率：真灯条 contourArea/boundingRectArea 应较高（>0.3）
+                double contour_area = cv::contourArea(contour);
+                double fill = contour_area / std::max(1.0, area);
+                if (fill < 0.3) {
+                    rejected.push_back({box, area, length, width, aspect, "FILL"});
+                    continue;
+                }
+            }
+
             double score = length * aspect;
             if (p.sort_by == "area") score = area;
             else if (p.sort_by == "length") score = length;
@@ -211,7 +236,7 @@ private:
     }
 
     void drawColor(cv::Mat& canvas, ColorResult& result, std::vector<Armor>& armors,
-                   bool is_red, bool draw_armor, bool draw_rejected) const {
+                   bool is_red, bool draw_armor, bool draw_rejected, const Params& p) const {
         const cv::Scalar pass_color = is_red ? cv::Scalar(0, 255, 255) : cv::Scalar(255, 255, 0);
         const cv::Scalar fail_color = cv::Scalar(80, 80, 80);
         const cv::Scalar armor_color = is_red ? cv::Scalar(0, 0, 255) : cv::Scalar(255, 0, 0);
@@ -232,15 +257,52 @@ private:
         }
 
         if (result.bars.size() >= 2) {
-            auto quad = armorQuad(result.bars[0].rect, result.bars[1].rect);
-            result.armors = 1;
-            armors.push_back({is_red ? "red" : "blue", quad});
-            if (draw_armor) {
-                drawArmor(canvas, quad, armor_color, is_red ? "Red Armor" : "Blue Armor");
+            bool pair_ok = true;
+            if (p.pair_validation) {
+                pair_ok = validatePair(result.bars[0], result.bars[1]);
+            }
+            if (pair_ok) {
+                auto quad = armorQuad(result.bars[0].rect, result.bars[1].rect);
+                result.armors = 1;
+                armors.push_back({is_red ? "red" : "blue", quad});
+                if (draw_armor) {
+                    drawArmor(canvas, quad, armor_color, is_red ? "Red Armor" : "Blue Armor");
+                }
+            } else {
+                result.armors = 0;
             }
         } else {
             result.armors = 0;
         }
+    }
+
+    // 几何配对验证：检查两根候选灯条是否满足真实装甲板的物理约束
+    // 阈值基于装甲板物理尺寸推导，正常情况下不需要调整
+    bool validatePair(const Bar& a, const Bar& b) const {
+        // 1) 长度相近：两根灯条长度差 < 较长者的 0.6 倍
+        const double len_a = a.length, len_b = b.length;
+        const double len_max = std::max(len_a, len_b);
+        const double len_min = std::min(len_a, len_b);
+        if (len_max - len_min > len_max * 0.6) return false;
+
+        // 2) 角度相近：灯条倾斜角差 < 30°
+        const double ang_a = a.rect.size.width >= a.rect.size.height ? a.rect.angle : a.rect.angle + 90.0;
+        const double ang_b = b.rect.size.width >= b.rect.size.height ? b.rect.angle : b.rect.angle + 90.0;
+        double ang_diff = std::abs(ang_a - ang_b);
+        if (ang_diff > 90.0) ang_diff = 180.0 - ang_diff;
+        if (ang_diff > 30.0) return false;
+
+        // 3) 间距合理：中心距在 [0.5, 5.0] 倍平均长度之间
+        const double cx = std::abs(a.rect.center.x - b.rect.center.x);
+        const double cy = std::abs(a.rect.center.y - b.rect.center.y);
+        const double dist = std::sqrt(cx * cx + cy * cy);
+        const double avg_len = (len_a + len_b) * 0.5;
+        if (dist < avg_len * 0.5 || dist > avg_len * 5.0) return false;
+
+        // 4) y 坐标接近：灯条垂直偏差 < 平均长度的 1.0 倍
+        if (cy > avg_len * 1.0) return false;
+
+        return true;
     }
 
     std::vector<cv::Point> armorQuad(const cv::RotatedRect& a, const cv::RotatedRect& b) const {

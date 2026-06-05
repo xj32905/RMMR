@@ -5,6 +5,7 @@
 #include <opencv2/opencv.hpp>
 
 #include <armor_detector/armor_detect_core.hpp>
+#include <armor_detector/onnx_classifier.hpp>
 
 #include <algorithm>
 #include <sstream>
@@ -15,11 +16,27 @@ public:
     ArmorDetectorNode() : Node("detector_node") {
         declareParams();
 
+        // W7: ONNX 数字识别（可选）
+        declare_parameter("onnx_enabled", false);
+        declare_parameter("onnx_model_path", "");
+
         sub_ = create_subscription<sensor_msgs::msg::Image>(
             "/camera/image", rclcpp::SensorDataQoS(),
             std::bind(&ArmorDetectorNode::onImage, this, std::placeholders::_1));
         debug_pub_ = create_publisher<sensor_msgs::msg::Image>("/armor/debug_image", 10);
         result_pub_ = create_publisher<std_msgs::msg::String>("/armor_result", 10);
+
+        // 尝试加载 ONNX 模型
+        onnx_enabled_ = get_parameter("onnx_enabled").as_bool();
+        if (onnx_enabled_) {
+            std::string model_path = get_parameter("onnx_model_path").as_string();
+            if (!model_path.empty() && classifier_.loadModel(model_path)) {
+                RCLCPP_INFO(get_logger(), "ONNX 模型已加载: %s", model_path.c_str());
+            } else {
+                RCLCPP_WARN(get_logger(), "ONNX 模型加载失败或路径为空，关闭数字识别");
+                onnx_enabled_ = false;
+            }
+        }
 
         RCLCPP_INFO(get_logger(), "detector_node started: ROS IO only, algorithm in armor_detect_core.hpp");
     }
@@ -48,6 +65,9 @@ private:
         declare_parameter("max_contour_area", 3000.0);
         declare_parameter("min_aspect_ratio", 1.5);
         declare_parameter("sort_by", "score");  // score / length / area / aspect
+
+        declare_parameter("pair_validation", false);
+        declare_parameter("strict_lightbar_filter", false);
     }
 
     armor_detect::Params readParams() {
@@ -74,6 +94,8 @@ private:
         p.min_contour_area = std::max(0.0, get_parameter("min_contour_area").as_double());
         p.max_contour_area = std::max(p.min_contour_area, get_parameter("max_contour_area").as_double());
         p.min_aspect_ratio = std::max(1.0, get_parameter("min_aspect_ratio").as_double());
+        p.pair_validation = get_parameter("pair_validation").as_bool();
+        p.strict_lightbar_filter = get_parameter("strict_lightbar_filter").as_bool();
         return p;
     }
 
@@ -84,8 +106,18 @@ private:
 
             auto p = readParams();
             auto result = detector_.detect(img, p);
+
+            // W7: ONNX 数字识别
+            std::vector<armor_detect::ClassifyResult> labels;
+            if (onnx_enabled_) {
+                for (const auto& armor : result.armors) {
+                    labels.push_back(classifier_.classify(img, armor.points));
+                }
+            }
+
             auto summary = detector_.summary(result, p);
-            auto text = formatResult(result);
+            auto text = formatResult(result, labels);
+            summary = formatSummary(summary, labels);
 
             std_msgs::msg::String out;
             out.data = text;
@@ -95,6 +127,7 @@ private:
             if (!debug_ || result.debug_image.empty()) return;
             cv::Mat debug_img = result.debug_image;
             if (debug_img.channels() == 1) cv::cvtColor(debug_img, debug_img, cv::COLOR_GRAY2BGR);
+            drawLabels(debug_img, result, labels);
             drawHud(debug_img, summary);
             debug_pub_->publish(*cv_bridge::CvImage(msg->header, "bgr8", debug_img).toImageMsg());
         } catch (const std::exception& e) {
@@ -102,13 +135,20 @@ private:
         }
     }
 
-    std::string formatResult(const armor_detect::Result& result) const {
+    std::string formatResult(const armor_detect::Result& result,
+                             const std::vector<armor_detect::ClassifyResult>& labels) const {
         std::ostringstream oss;
         oss << "{\"detected\":" << (result.armors.empty() ? "false" : "true") << ",\"armors\":[";
         for (size_t i = 0; i < result.armors.size(); ++i) {
             const auto& armor = result.armors[i];
             if (i > 0) oss << ",";
-            oss << "{\"color\":\"" << armor.color << "\",\"points\":[";
+            oss << "{\"color\":\"" << armor.color << "\"";
+            // W7: 附加数字标签
+            if (i < labels.size() && labels[i].valid) {
+                oss << ",\"digit\":\"" << labels[i].label_text << "\""
+                    << ",\"confidence\":" << labels[i].confidence;
+            }
+            oss << ",\"points\":[";
             for (size_t j = 0; j < armor.points.size(); ++j) {
                 const auto& pt = armor.points[j];
                 if (j > 0) oss << ",";
@@ -118,6 +158,30 @@ private:
         }
         oss << "]}";
         return oss.str();
+    }
+
+    std::string formatSummary(const std::string& base,
+                              const std::vector<armor_detect::ClassifyResult>& labels) const {
+        std::ostringstream oss;
+        oss << base;
+        for (const auto& l : labels) {
+            if (l.valid) oss << ", " << l.label_text << "(" << l.confidence << ")";
+        }
+        return oss.str();
+    }
+
+    void drawLabels(cv::Mat& img, const armor_detect::Result& result,
+                    const std::vector<armor_detect::ClassifyResult>& labels) {
+        for (size_t i = 0; i < result.armors.size() && i < labels.size(); ++i) {
+            if (!labels[i].valid) continue;
+            const auto& pts = result.armors[i].points;
+            std::string tag = result.armors[i].color + "_" + labels[i].label_text;
+            cv::Point center = pts.empty() ? cv::Point(10, 80 + (int)i * 26)
+                : cv::Point((pts[0].x + pts[1].x + pts[2].x + pts[3].x) / 4,
+                            (pts[0].y + pts[1].y + pts[2].y + pts[3].y) / 4);
+            cv::putText(img, tag, center + cv::Point(0, 22),
+                        cv::FONT_HERSHEY_SIMPLEX, 0.8, {0, 255, 255}, 2);
+        }
     }
 
     void drawHud(cv::Mat& img, const std::string& text) {
@@ -134,7 +198,9 @@ private:
     }
 
     armor_detect::Detector detector_;
+    armor_detect::OnnxClassifier classifier_;
     bool debug_ = true;
+    bool onnx_enabled_ = false;
     int log_interval_ms_ = 1000;
     rclcpp::Time last_log_;
 
