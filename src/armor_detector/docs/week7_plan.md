@@ -57,7 +57,7 @@ src/armor_detector
 当前代码状态：
 
 ```text
-ONNX 数字识别接口已预接入，默认关闭。
+ROI 裁剪调试开关已加入，默认关闭；ONNX 数字识别接口已预接入，默认关闭。
 ```
 
 相关文件：
@@ -72,6 +72,9 @@ launch/detector.launch.py
 当前参数：
 
 ```yaml
+roi_debug_save: false
+roi_debug_dir: "src/armor_detector/docs/week7_roi_samples"
+roi_debug_max_count: 20
 onnx_enabled: false
 onnx_model_path: ""
 ```
@@ -197,13 +200,29 @@ find /home/xj -name "tiny_resnet.onnx"
 
 ### Step 4：先验证 ROI 截图
 
-在不启用 ONNX 的情况下，先把 ROI 裁剪出来保存或显示，确认裁剪区域是否正确。
+在不启用 ONNX 的情况下，先把 ROI 裁剪出来保存，确认裁剪区域是否正确。
+
+当前已加入 ROI 保存调试开关，默认关闭：
+
+```bash
+ros2 param set /detector_node roi_debug_save true
+ros2 param set /detector_node roi_debug_max_count 20
+ros2 param set /detector_node roi_debug_dir src/armor_detector/docs/week7_roi_samples
+```
+
+保存路径示例：
+
+```text
+src/armor_detector/docs/week7_roi_samples/roi_0_red.png
+```
 
 验证标准：
 
 ```text
 ROI 中应主要包含装甲板数字区域，背景占比不能太大。
 ```
+
+当前 ROI 裁剪方式为 `boundingRect(points) + 15% margin`，用于第一阶段快速验证。后续更稳定的方案是四点透视变换。
 
 ### Step 5：启用 ONNX 实测
 
@@ -253,10 +272,11 @@ ros2 launch armor_detector detector.launch.py onnx_enabled:=true onnx_model_path
 
 ```text
 1. 已明确 ROI + ONNX 数字识别接入位置
-2. 已保留 onnx_enabled / onnx_model_path 参数
-3. 已确认 ONNX 默认关闭，不影响第 6 周检测链路
-4. 已列出模型文件和元数据确认清单
-5. 已规划 boundingRect 裁剪到透视变换的迭代路线
+2. 已加入 ROI 保存调试开关，默认关闭
+3. 已保留 onnx_enabled / onnx_model_path 参数
+4. 已确认 ONNX 默认关闭，不影响第 6 周检测链路
+5. 已列出模型文件和元数据确认清单
+6. 已规划 boundingRect 裁剪到透视变换的迭代路线
 ```
 
 当前不能写成：

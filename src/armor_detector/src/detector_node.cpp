@@ -8,6 +8,7 @@
 #include <armor_detector/onnx_classifier.hpp>
 
 #include <algorithm>
+#include <filesystem>
 #include <sstream>
 #include <string>
 
@@ -16,7 +17,10 @@ public:
     ArmorDetectorNode() : Node("detector_node") {
         declareParams();
 
-        // W7: ONNX 数字识别（可选）
+        // W7: ROI 裁剪调试 + ONNX 数字识别（可选，默认关闭）
+        declare_parameter("roi_debug_save", false);
+        declare_parameter("roi_debug_dir", "src/armor_detector/docs/week7_roi_samples");
+        declare_parameter("roi_debug_max_count", 20);
         declare_parameter("onnx_enabled", false);
         declare_parameter("onnx_model_path", "");
 
@@ -107,6 +111,9 @@ private:
             auto p = readParams();
             auto result = detector_.detect(img, p);
 
+            // W7: 先保存 ROI 样例，验证四点裁剪是否可靠；默认关闭，不影响 W6 检测链路。
+            saveRoiSamples(img, result);
+
             // W7: ONNX 数字识别
             std::vector<armor_detect::ClassifyResult> labels;
             if (onnx_enabled_) {
@@ -170,6 +177,44 @@ private:
         return oss.str();
     }
 
+
+    void saveRoiSamples(const cv::Mat& img, const armor_detect::Result& result) {
+        if (!get_parameter("roi_debug_save").as_bool()) return;
+        const int max_count = std::max(0, (int)get_parameter("roi_debug_max_count").as_int());
+        if (max_count <= 0 || roi_save_count_ >= max_count) return;
+
+        const std::string dir = get_parameter("roi_debug_dir").as_string();
+        if (dir.empty()) return;
+        std::error_code ec;
+        std::filesystem::create_directories(dir, ec);
+        if (ec) {
+            RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+                                 "ROI 保存目录创建失败: %s", dir.c_str());
+            return;
+        }
+
+        for (size_t i = 0; i < result.armors.size() && roi_save_count_ < max_count; ++i) {
+            const auto& armor = result.armors[i];
+            if (armor.points.size() != 4) continue;
+
+            cv::Rect box = cv::boundingRect(armor.points);
+            const int mw = cvRound(box.width * 0.15);
+            const int mh = cvRound(box.height * 0.15);
+            box.x = std::max(0, box.x - mw);
+            box.y = std::max(0, box.y - mh);
+            box.width = std::min(img.cols - box.x, box.width + 2 * mw);
+            box.height = std::min(img.rows - box.y, box.height + 2 * mh);
+            if (box.width <= 0 || box.height <= 0) continue;
+
+            const cv::Mat roi = img(box).clone();
+            const std::string path = dir + "/roi_" + std::to_string(roi_save_count_) + "_" + armor.color + ".png";
+            if (cv::imwrite(path, roi)) {
+                ++roi_save_count_;
+                RCLCPP_INFO(get_logger(), "保存 ROI 样例: %s", path.c_str());
+            }
+        }
+    }
+
     void drawLabels(cv::Mat& img, const armor_detect::Result& result,
                     const std::vector<armor_detect::ClassifyResult>& labels) {
         for (size_t i = 0; i < result.armors.size() && i < labels.size(); ++i) {
@@ -202,6 +247,7 @@ private:
     bool debug_ = true;
     bool onnx_enabled_ = false;
     int log_interval_ms_ = 1000;
+    int roi_save_count_ = 0;
     rclcpp::Time last_log_;
 
     rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr sub_;
