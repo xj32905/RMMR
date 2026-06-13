@@ -3,6 +3,7 @@
 #include <opencv2/opencv.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <sstream>
 #include <string>
@@ -65,9 +66,10 @@ struct ColorResult {
     int armors = 0;
 };
 
+// 四点顺序：左上、右上、右下、左下
 struct Armor {
     std::string color;
-    std::vector<cv::Point> points;  // 左上、右上、右下、左下，用于后续 ROI 裁剪/数字识别
+    std::array<cv::Point2f, 4> points;
 };
 
 struct Result {
@@ -106,11 +108,17 @@ public:
 
         if (p.target_color == "red" || p.target_color == "all") {
             result.red = detectColor(red_mask, p);
-            drawColor(canvas, result.red, result.armors, true, draw_armor, draw_rejected, p);
+            auto red_armors = matchArmors(result.red.bars, true, p);
+            result.red.armors = static_cast<int>(red_armors.size());
+            result.armors.insert(result.armors.end(), red_armors.begin(), red_armors.end());
+            drawColor(canvas, result.red, red_armors, true, draw_armor, draw_rejected, p);
         }
         if (p.target_color == "blue" || p.target_color == "all") {
             result.blue = detectColor(blue_mask, p);
-            drawColor(canvas, result.blue, result.armors, false, draw_armor, draw_rejected, p);
+            auto blue_armors = matchArmors(result.blue.bars, false, p);
+            result.blue.armors = static_cast<int>(blue_armors.size());
+            result.armors.insert(result.armors.end(), blue_armors.begin(), blue_armors.end());
+            drawColor(canvas, result.blue, blue_armors, false, draw_armor, draw_rejected, p);
         }
 
         result.debug_image = canvas;
@@ -120,7 +128,6 @@ public:
     ColorResult detectColor(const cv::Mat& mask, const Params& p) const {
         ColorResult out;
         out.bars = findBars(mask, p, out.contours, out.rejected);
-        out.armors = out.bars.size() >= 2 ? 1 : 0;
         return out;
     }
 
@@ -130,7 +137,8 @@ public:
             << ", color=" << p.target_color
             << ", sort=" << p.sort_by
             << ", red=" << r.red.contours << "/" << r.red.bars.size() << "/" << r.red.armors
-            << ", blue=" << r.blue.contours << "/" << r.blue.bars.size() << "/" << r.blue.armors;
+            << ", blue=" << r.blue.contours << "/" << r.blue.bars.size() << "/" << r.blue.armors
+            << ", total=" << r.armors.size();
         return oss.str();
     }
 
@@ -230,12 +238,23 @@ private:
         }
 
         std::sort(bars.begin(), bars.end(), [](const Bar& a, const Bar& b) { return a.score > b.score; });
-        if (bars.size() > 2) bars.resize(2);
-        if (bars.size() == 2 && bars[0].rect.center.x > bars[1].rect.center.x) std::swap(bars[0], bars[1]);
         return bars;
     }
 
-    void drawColor(cv::Mat& canvas, ColorResult& result, std::vector<Armor>& armors,
+    // 全排列配对：所有满足几何约束的灯条组合都生成装甲板
+    std::vector<Armor> matchArmors(const std::vector<Bar>& bars, bool is_red, const Params& p) const {
+        std::vector<Armor> armors;
+        for (size_t i = 0; i < bars.size(); ++i) {
+            for (size_t j = i + 1; j < bars.size(); ++j) {
+                if (p.pair_validation && !validatePair(bars[i], bars[j])) continue;
+                auto quad = armorQuad(bars[i].rect, bars[j].rect);
+                armors.push_back({is_red ? "red" : "blue", quad});
+            }
+        }
+        return armors;
+    }
+
+    void drawColor(cv::Mat& canvas, ColorResult& result, const std::vector<Armor>& armors,
                    bool is_red, bool draw_armor, bool draw_rejected, const Params& p) const {
         const cv::Scalar pass_color = is_red ? cv::Scalar(0, 255, 255) : cv::Scalar(255, 255, 0);
         const cv::Scalar fail_color = cv::Scalar(80, 80, 80);
@@ -256,28 +275,15 @@ private:
                         b.box.tl() + cv::Point(0, -4), cv::FONT_HERSHEY_SIMPLEX, 0.42, pass_color, 1);
         }
 
-        if (result.bars.size() >= 2) {
-            bool pair_ok = true;
-            if (p.pair_validation) {
-                pair_ok = validatePair(result.bars[0], result.bars[1]);
+        for (size_t i = 0; i < armors.size(); ++i) {
+            if (draw_armor) {
+                drawArmor(canvas, armors[i].points, armor_color,
+                          is_red ? cv::format("Red#%zu", i + 1) : cv::format("Blue#%zu", i + 1));
             }
-            if (pair_ok) {
-                auto quad = armorQuad(result.bars[0].rect, result.bars[1].rect);
-                result.armors = 1;
-                armors.push_back({is_red ? "red" : "blue", quad});
-                if (draw_armor) {
-                    drawArmor(canvas, quad, armor_color, is_red ? "Red Armor" : "Blue Armor");
-                }
-            } else {
-                result.armors = 0;
-            }
-        } else {
-            result.armors = 0;
         }
     }
 
     // 几何配对验证：检查两根候选灯条是否满足真实装甲板的物理约束
-    // 阈值基于装甲板物理尺寸推导，正常情况下不需要调整
     bool validatePair(const Bar& a, const Bar& b) const {
         // 1) 长度相近：两根灯条长度差 < 较长者的 0.6 倍
         const double len_a = a.length, len_b = b.length;
@@ -305,20 +311,24 @@ private:
         return true;
     }
 
-    std::vector<cv::Point> armorQuad(const cv::RotatedRect& a, const cv::RotatedRect& b) const {
+    std::array<cv::Point2f, 4> armorQuad(const cv::RotatedRect& a, const cv::RotatedRect& b) const {
         cv::RotatedRect left = a;
         cv::RotatedRect right = b;
         if (left.center.x > right.center.x) std::swap(left, right);
 
         auto le = ends(left);
         auto re = ends(right);
-        return {toPoint(le.first), toPoint(re.first), toPoint(re.second), toPoint(le.second)};
+        return {le.first, re.first, re.second, le.second};
     }
 
-    void drawArmor(cv::Mat& img, const std::vector<cv::Point>& quad,
+    void drawArmor(cv::Mat& img, const std::array<cv::Point2f, 4>& quad,
                    const cv::Scalar& color, const std::string& label) const {
-        cv::polylines(img, quad, true, color, 2);
-        cv::putText(img, label, quad[0] + cv::Point(0, -8), cv::FONT_HERSHEY_SIMPLEX, 0.55, color, 2);
+        // Point2f 转 Point 画线
+        std::vector<cv::Point> pts;
+        pts.reserve(4);
+        for (const auto& p : quad) pts.emplace_back(cvRound(p.x), cvRound(p.y));
+        cv::polylines(img, pts, true, color, 2);
+        cv::putText(img, label, pts[0] + cv::Point(0, -8), cv::FONT_HERSHEY_SIMPLEX, 0.55, color, 2);
     }
 
     std::pair<cv::Point2f, cv::Point2f> ends(const cv::RotatedRect& rect) const {
@@ -328,10 +338,6 @@ private:
         cv::Point2f top = (pts[0] + pts[1]) * 0.5f;
         cv::Point2f bottom = (pts[2] + pts[3]) * 0.5f;
         return {top, bottom};
-    }
-
-    cv::Point toPoint(const cv::Point2f& p) const {
-        return {cvRound(p.x), cvRound(p.y)};
     }
 
     void applyGamma(cv::Mat& img, double gamma) const {

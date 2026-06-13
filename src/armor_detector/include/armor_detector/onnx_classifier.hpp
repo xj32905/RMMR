@@ -45,9 +45,9 @@ public:
     /// 输入：原图 BGR + 装甲板四点（左上 右上 右下 左下）
     /// 输出：分类结果
     ClassifyResult classify(const cv::Mat& bgr,
-                            const std::vector<cv::Point>& armor_points) {
+                            const std::array<cv::Point2f, 4>& armor_points) {
         ClassifyResult out;
-        if (!loaded_ || bgr.empty() || armor_points.size() != 4) return out;
+        if (!loaded_ || bgr.empty()) return out;
 
         cv::Mat roi = cropArmor(bgr, armor_points);
         if (roi.empty()) return out;
@@ -82,8 +82,13 @@ public:
 private:
     /// 从原图裁出装甲板区域（boundingRect + margin）
     cv::Mat cropArmor(const cv::Mat& bgr,
-                      const std::vector<cv::Point>& pts) const {
-        cv::Rect box = cv::boundingRect(pts);
+                      const std::array<cv::Point2f, 4>& pts) const {
+        // Point2f 转 Point 计算 boundingRect
+        std::vector<cv::Point> int_pts;
+        int_pts.reserve(4);
+        for (const auto& p : pts) int_pts.emplace_back(cvRound(p.x), cvRound(p.y));
+        cv::Rect box = cv::boundingRect(int_pts);
+
         // 加 15% margin
         int mw = cvRound(box.width * 0.15);
         int mh = cvRound(box.height * 0.15);

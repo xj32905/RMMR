@@ -1,6 +1,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/image.hpp>
-#include <std_msgs/msg/string.hpp>
+#include <armor_interfaces/msg/armors.hpp>
+#include <armor_interfaces/msg/armor.hpp>
 #include <cv_bridge/cv_bridge.h>
 #include <opencv2/opencv.hpp>
 
@@ -28,7 +29,7 @@ public:
             "/camera/image", rclcpp::SensorDataQoS(),
             std::bind(&ArmorDetectorNode::onImage, this, std::placeholders::_1));
         debug_pub_ = create_publisher<sensor_msgs::msg::Image>("/armor/debug_image", 10);
-        result_pub_ = create_publisher<std_msgs::msg::String>("/armor_result", 10);
+        result_pub_ = create_publisher<armor_interfaces::msg::Armors>("/armor/result", 10);
 
         // 尝试加载 ONNX 模型
         onnx_enabled_ = get_parameter("onnx_enabled").as_bool();
@@ -123,12 +124,7 @@ private:
             }
 
             auto summary = detector_.summary(result, p);
-            auto text = formatResult(result, labels);
-            summary = formatSummary(summary, labels);
-
-            std_msgs::msg::String out;
-            out.data = text;
-            result_pub_->publish(out);
+            publishResult(msg->header, result, labels);
             log(summary);
 
             if (!debug_ || result.debug_image.empty()) return;
@@ -142,41 +138,36 @@ private:
         }
     }
 
-    std::string formatResult(const armor_detect::Result& result,
-                             const std::vector<armor_detect::ClassifyResult>& labels) const {
-        std::ostringstream oss;
-        oss << "{\"detected\":" << (result.armors.empty() ? "false" : "true") << ",\"armors\":[";
+    void publishResult(const std_msgs::msg::Header& header,
+                       const armor_detect::Result& result,
+                       const std::vector<armor_detect::ClassifyResult>& labels) {
+        armor_interfaces::msg::Armors out;
+        out.header = header;
+
         for (size_t i = 0; i < result.armors.size(); ++i) {
             const auto& armor = result.armors[i];
-            if (i > 0) oss << ",";
-            oss << "{\"color\":\"" << armor.color << "\"";
-            // W7: 附加数字标签
-            if (i < labels.size() && labels[i].valid) {
-                oss << ",\"digit\":\"" << labels[i].label_text << "\""
-                    << ",\"confidence\":" << labels[i].confidence;
-            }
-            oss << ",\"points\":[";
-            for (size_t j = 0; j < armor.points.size(); ++j) {
-                const auto& pt = armor.points[j];
-                if (j > 0) oss << ",";
-                oss << "[" << pt.x << "," << pt.y << "]";
-            }
-            oss << "]}";
-        }
-        oss << "]}";
-        return oss.str();
-    }
+            armor_interfaces::msg::Armor a;
+            a.color = armor.color;
 
-    std::string formatSummary(const std::string& base,
-                              const std::vector<armor_detect::ClassifyResult>& labels) const {
-        std::ostringstream oss;
-        oss << base;
-        for (const auto& l : labels) {
-            if (l.valid) oss << ", " << l.label_text << "(" << l.confidence << ")";
-        }
-        return oss.str();
-    }
+            if (onnx_enabled_ && i < labels.size() && labels[i].valid) {
+                a.digit_label = labels[i].label_text;
+                a.confidence = labels[i].confidence;
+            } else {
+                a.digit_label = "";
+                a.confidence = 0.0f;
+            }
 
+            for (size_t j = 0; j < 4; ++j) {
+                a.points[j].x = armor.points[j].x;
+                a.points[j].y = armor.points[j].y;
+                a.points[j].z = 0.0f;
+            }
+
+            out.armors.push_back(a);
+        }
+
+        result_pub_->publish(out);
+    }
 
     void saveRoiSamples(const cv::Mat& img, const armor_detect::Result& result) {
         if (!get_parameter("roi_debug_save").as_bool()) return;
@@ -195,9 +186,12 @@ private:
 
         for (size_t i = 0; i < result.armors.size() && roi_save_count_ < max_count; ++i) {
             const auto& armor = result.armors[i];
-            if (armor.points.size() != 4) continue;
 
-            cv::Rect box = cv::boundingRect(armor.points);
+            std::vector<cv::Point> int_pts;
+            int_pts.reserve(4);
+            for (const auto& p : armor.points) int_pts.emplace_back(cvRound(p.x), cvRound(p.y));
+            cv::Rect box = cv::boundingRect(int_pts);
+
             const int mw = cvRound(box.width * 0.15);
             const int mh = cvRound(box.height * 0.15);
             box.x = std::max(0, box.x - mw);
@@ -221,9 +215,8 @@ private:
             if (!labels[i].valid) continue;
             const auto& pts = result.armors[i].points;
             std::string tag = result.armors[i].color + "_" + labels[i].label_text;
-            cv::Point center = pts.empty() ? cv::Point(10, 80 + (int)i * 26)
-                : cv::Point((pts[0].x + pts[1].x + pts[2].x + pts[3].x) / 4,
-                            (pts[0].y + pts[1].y + pts[2].y + pts[3].y) / 4);
+            cv::Point center(static_cast<int>((pts[0].x + pts[1].x + pts[2].x + pts[3].x) / 4.0f),
+                             static_cast<int>((pts[0].y + pts[1].y + pts[2].y + pts[3].y) / 4.0f));
             cv::putText(img, tag, center + cv::Point(0, 22),
                         cv::FONT_HERSHEY_SIMPLEX, 0.8, {0, 255, 255}, 2);
         }
@@ -252,7 +245,7 @@ private:
 
     rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr sub_;
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr debug_pub_;
-    rclcpp::Publisher<std_msgs::msg::String>::SharedPtr result_pub_;
+    rclcpp::Publisher<armor_interfaces::msg::Armors>::SharedPtr result_pub_;
 };
 
 int main(int argc, char** argv) {

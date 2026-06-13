@@ -4,6 +4,8 @@ project(armor_detector)
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(armor_interfaces REQUIRED)
 find_package(cv_bridge REQUIRED)
 find_package(image_transport REQUIRED)
 find_package(OpenCV REQUIRED)
@@ -20,7 +22,7 @@ ament_target_dependencies(camera_node rclcpp sensor_msgs cv_bridge OpenCV)
 # 识别节点：ROS IO 在 detector_node.cpp，纯算法在 include/armor_detector/armor_detect_core.hpp
 add_executable(detector_node src/detector_node.cpp)
 target_include_directories(detector_node PRIVATE include)
-ament_target_dependencies(detector_node rclcpp sensor_msgs cv_bridge image_transport OpenCV)
+ament_target_dependencies(detector_node rclcpp sensor_msgs geometry_msgs armor_interfaces cv_bridge image_transport OpenCV)
 
 # ===== 新增：海康 MVS 相机节点 =====
 add_executable(mvs_camera_node src/mvs_camera_node.cpp)
