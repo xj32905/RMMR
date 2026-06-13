@@ -31,12 +31,13 @@ detector_node:
     # 4) W6 严格灯条筛选：角度约束+填充率校验，过滤背景伪灯条
     strict_lightbar_filter: false  # false=仅面积+长宽比, true=额外校验角度+填充率
 
-    # 5) W7 ROI 裁剪调试 + ONNX 数字识别（可选，默认关闭）
+    # 5) W7 ROI 裁剪调试 + ONNX 数字识别
     roi_debug_save: false         # true=保存检测到的装甲板 ROI 样例，用于检查裁剪是否正确
     roi_debug_dir: "src/armor_detector/docs/week7_roi_samples"
     roi_debug_max_count: 20
-    onnx_enabled: false           # true=启用 ONNX 数字识别
-    onnx_model_path: ""           # tiny_resnet.onnx 模型路径
+    onnx_enabled: true            # true=启用 ONNX 数字识别
+    onnx_model_path: "/home/xj/rm_test/assets/tiny_resnet.onnx"  # tiny_resnet.onnx 模型路径
+    not_armor_threshold: 0.7      # 若模型输出 not_armor 且置信度超过此阈值，则丢弃该装甲板
 
 camera_node:
   ros__parameters:

@@ -24,6 +24,7 @@ public:
         declare_parameter("roi_debug_max_count", 20);
         declare_parameter("onnx_enabled", false);
         declare_parameter("onnx_model_path", "");
+        declare_parameter("not_armor_threshold", 0.7);
 
         sub_ = create_subscription<sensor_msgs::msg::Image>(
             "/camera/image", rclcpp::SensorDataQoS(),
@@ -33,6 +34,7 @@ public:
 
         // 尝试加载 ONNX 模型
         onnx_enabled_ = get_parameter("onnx_enabled").as_bool();
+        not_armor_threshold_ = static_cast<float>(get_parameter("not_armor_threshold").as_double());
         if (onnx_enabled_) {
             std::string model_path = get_parameter("onnx_model_path").as_string();
             if (!model_path.empty() && classifier_.loadModel(model_path)) {
@@ -119,7 +121,7 @@ private:
             std::vector<armor_detect::ClassifyResult> labels;
             if (onnx_enabled_) {
                 for (const auto& armor : result.armors) {
-                    labels.push_back(classifier_.classify(img, armor.points));
+                    labels.push_back(classifier_.classify(img, armor.points, not_armor_threshold_));
                 }
             }
 
@@ -239,6 +241,7 @@ private:
     armor_detect::OnnxClassifier classifier_;
     bool debug_ = true;
     bool onnx_enabled_ = false;
+    float not_armor_threshold_ = 0.7f;
     int log_interval_ms_ = 1000;
     int roi_save_count_ = 0;
     rclcpp::Time last_log_;

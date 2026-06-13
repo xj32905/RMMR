@@ -44,8 +44,10 @@ public:
 
     /// 输入：原图 BGR + 装甲板四点（左上 右上 右下 左下）
     /// 输出：分类结果
+    /// not_armor_threshold: 若 "not_armor" 置信度超过该阈值，则视为无效装甲板
     ClassifyResult classify(const cv::Mat& bgr,
-                            const std::array<cv::Point2f, 4>& armor_points) {
+                            const std::array<cv::Point2f, 4>& armor_points,
+                            float not_armor_threshold = 0.7f) {
         ClassifyResult out;
         if (!loaded_ || bgr.empty()) return out;
 
@@ -75,6 +77,11 @@ public:
             out.label_text = LABEL_NAMES[id];
             out.confidence = static_cast<float>(max_val);
             out.valid = true;
+
+            // W7: 过滤非装甲板的高置信误判
+            if (out.label_text == "not_armor" && out.confidence >= not_armor_threshold) {
+                out.valid = false;
+            }
         }
         return out;
     }
