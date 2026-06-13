@@ -38,7 +38,7 @@ src/armor_detector/
                                │  [W7] OnnxClassifier         │
                                │   ROI crop + classify        │
                                │       ↓                      │
-                               │  /armor_result (JSON)        │
+                               │  /armor/result (Armors msg)  │
                                │  /armor/debug_image (+label) │
                                └──────────────────────────────┘
 ```
@@ -73,7 +73,7 @@ MVS SDK 安装路径（如不使用 MVS 相机可忽略）：
 ```bash
 cd /home/xj/rm_test
 source /opt/ros/humble/setup.bash
-colcon build --base-paths src/armor_detector --packages-select armor_detector --cmake-args -DCMAKE_BUILD_TYPE=Release
+colcon build --packages-select armor_interfaces armor_detector --cmake-args -DCMAKE_BUILD_TYPE=Release
 source install/setup.bash
 ```
 
@@ -147,24 +147,37 @@ ros2 run armor_detector camera_node --ros-args -p source_type:=opencv -p video_p
 | 话题 | 类型 | 方向 | 说明 |
 |------|------|------|------|
 | `/camera/image` | `sensor_msgs/msg/Image` | 输入 | 相机图像流 |
-| `/armor_result` | `std_msgs/msg/String` | 输出 | 检测结果 JSON |
+| `/armor/result` | `armor_interfaces/msg/Armors` | 输出 | 结构化装甲板数组，包含颜色、数字标签、置信度和四点 |
 | `/armor/debug_image` | `sensor_msgs/msg/Image` | 输出 | 调试标注图像 |
 
-### `/armor_result` 格式
+### `/armor/result` 格式
 
-检测到装甲板：
+查看结构化结果：
 
-```json
-{"detected":true,"armors":[{"color":"red","points":[[258,180],[368,180],[368,300],[258,300]]}]}
+```bash
+ros2 topic echo /armor/result
 ```
 
-未检测到：
+一帧结果类型：
 
-```json
-{"detected":false,"armors":[]}
+```text
+std_msgs/Header header
+armor_interfaces/Armor[] armors
 ```
 
-四点顺序：**左上 → 右上 → 右下 → 左下**，可用于后续数字 ROI 裁剪。
+单个装甲板类型：
+
+```text
+std_msgs/Header header
+string color
+string digit_label
+float32 confidence
+geometry_msgs/Point32[4] points
+```
+
+四点顺序：**左上 → 右上 → 右下 → 左下**，可用于后续数字 ROI 裁剪和透视变换。
+
+旧版 `/armor_result` JSON 字符串接口已被 `/armor/result` 结构化消息替代，后续模块应优先订阅结构化话题。
 
 ## 8. 检测链路
 
@@ -176,9 +189,10 @@ BGR 图像
   → 形态学操作（闭运算 / 开运算）
   → findContours → boundingRect
   → 灯条筛选：面积 + 长宽比 + 排序
-  → TOP2 候选灯条
+  → 保留多个候选灯条
+  → 灯条两两配对生成多个装甲板
   → [可选] 几何配对验证（pair_validation=true）
-  → 装甲板四点输出
+  → 装甲板四点数组输出
 ```
 
 ## 9. 参数配置入口
@@ -210,7 +224,7 @@ BGR 图像
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
-| `pair_validation` | false | false=TOP2直接配对; true=启用几何配对验证 |
+| `pair_validation` | false | false=宽松配对; true=启用几何配对验证 |
 
 几何验证阈值硬编码在 `armor_detect_core.hpp` 的 `validatePair()` 中，基于装甲板物理约束：
 
@@ -241,7 +255,7 @@ BGR 图像
 | `onnx_enabled` | false | true=启用 ONNX 数字识别 |
 | `onnx_model_path` | "" | `tiny_resnet.onnx` 模型文件路径 |
 
-启用后 `/armor_result` JSON 预期会增加 `digit` 和 `confidence` 字段，调试图像上标注数字标签。当前仅为接口预接入，尚未用真实 `tiny_resnet.onnx` 完成验证。
+启用后 `/armor/result` 中每个 armor 的 `digit_label` 和 `confidence` 字段会填入数字分类结果，调试图像上标注数字标签。当前仅为接口预接入，尚未用真实 `tiny_resnet.onnx` 完成验证。
 
 当前预处理实现：灰度单通道 → 等比缩放 → 黑底填充 32×32 → 像素归一化 [0,1]。
 当前标签映射占位：0:one, 1:two, 2:three, 3:four, 4:five, 5:sentry, 6:outpost, 7:base, 8:not_armor。实际使用前需以模型训练配置为准。
@@ -281,8 +295,8 @@ ros2 run armor_detector detector_node --ros-args --params-file install/armor_det
 1. **背景误检**：场地红/蓝色长条形物体会通过 HSV + 长宽比筛选，产生伪灯条。W6 已加入 `strict_lightbar_filter`（角度+填充率）和 `pair_validation`（几何配对验证），需真实场景验证效果。
 2. **远距离漏检**：远距离灯条在图像中很小（<5px），mask 中只有 1~2 像素宽，`contourArea` 接近零，依赖 `boundingRect` 面积。
 3. **光照敏感**：过曝/低照度场景下 HSV mask 可能失效，需要调节曝光或 S/V 阈值。
-4. **JSON 格式输出**：`/armor_result` 使用 `std_msgs/msg/String` JSON 文本，非自定义 msg，不便与其他节点集成。
-5. **ONNX 待验证**：ONNX 数字识别接口已预接入，默认关闭；待 `tiny_resnet.onnx` 模型文件、输入尺寸、类别顺序和预处理方式确认后，再启用实测。
+4. **ONNX 待验证**：ONNX 数字识别接口已预接入，默认关闭；待 `tiny_resnet.onnx` 模型文件、输入尺寸、类别顺序和预处理方式确认后，再启用实测。
+5. **真实多装甲板场景待验证**：当前代码已支持多个灯条两两配对和多个 armor 输出，但仍需真实多目标画面验证误配对情况。
 
 ### W6 状态（已完成本轮真实相机调试）
 
@@ -292,9 +306,13 @@ ros2 run armor_detector detector_node --ros-args --params-file install/armor_det
 - 已调整：`max_contour_area` 提高到 `50000.0`，恢复 result 模式输出
 - 后续：拿到标准装甲板后继续确认最终稳定参数
 
-### W7 状态（预接入，未完成实测）
+### W7 状态（预接入，未完成 ONNX 实测）
 
+- ROI 保存调试接口已加入，默认关闭
 - ONNX 数字识别接口已预接入（`onnx_classifier.hpp` + `detector_node.cpp` 集成），默认关闭
+- `points` 已改为固定 `std::array<cv::Point2f, 4>`
+- 检测结果已支持同一帧多个装甲板
+- 输出已改为 ROS2 结构化消息 `/armor/result`，类型为 `armor_interfaces/msg/Armors`
 - 待做：确认 `tiny_resnet.onnx`、输入尺寸、类别顺序、预处理方式 → `onnx_enabled:=true` → 真实效果验证 → 错误案例分析
 
 ## 12. 运行截图与调试
