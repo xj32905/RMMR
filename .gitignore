@@ -2,4 +2,11 @@
 /build
 /install
 /log
+/src/build
+/src/install
+/src/log
+/assets
+*.onnx
+*.pth
+*.pt
 hello
