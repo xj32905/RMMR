@@ -318,6 +318,14 @@ private:
 
         auto le = ends(left);
         auto re = ends(right);
+
+        // 保证左右灯条的"上端"在同一侧，否则四边形会画成叉形
+        const float d1 = std::abs(le.first.y - re.first.y);
+        const float d2 = std::abs(le.first.y - re.second.y);
+        if (d2 < d1) {
+            std::swap(re.first, re.second);
+        }
+
         return {le.first, re.first, re.second, le.second};
     }
 
@@ -332,11 +340,18 @@ private:
     }
 
     std::pair<cv::Point2f, cv::Point2f> ends(const cv::RotatedRect& rect) const {
-        cv::Point2f pts[4];
-        rect.points(pts);
-        std::sort(pts, pts + 4, [](const cv::Point2f& a, const cv::Point2f& b) { return a.y < b.y; });
-        cv::Point2f top = (pts[0] + pts[1]) * 0.5f;
-        cv::Point2f bottom = (pts[2] + pts[3]) * 0.5f;
+        // 基于 RotatedRect 长轴方向计算灯条上下端点，比按 y 排序更稳定
+        const cv::Point2f center = rect.center;
+        const bool width_is_long = rect.size.width >= rect.size.height;
+        float angle_rad = rect.angle * CV_PI / 180.0f;
+        if (!width_is_long) angle_rad += CV_PI / 2.0f;
+
+        const float half_len = (width_is_long ? rect.size.width : rect.size.height) * 0.5f;
+        const cv::Point2f dir(std::cos(angle_rad), std::sin(angle_rad));
+
+        // top = 远离中心的长轴端点（视觉上偏上或偏右），bottom = 另一端
+        const cv::Point2f top = center + dir * half_len;
+        const cv::Point2f bottom = center - dir * half_len;
         return {top, bottom};
     }
 
