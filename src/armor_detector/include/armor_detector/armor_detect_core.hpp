@@ -319,13 +319,6 @@ private:
         auto le = ends(left);
         auto re = ends(right);
 
-        // 保证左右灯条的"上端"在同一侧，否则四边形会画成叉形
-        const float d1 = std::abs(le.first.y - re.first.y);
-        const float d2 = std::abs(le.first.y - re.second.y);
-        if (d2 < d1) {
-            std::swap(re.first, re.second);
-        }
-
         return {le.first, re.first, re.second, le.second};
     }
 
@@ -349,9 +342,9 @@ private:
         const float half_len = (width_is_long ? rect.size.width : rect.size.height) * 0.5f;
         const cv::Point2f dir(std::cos(angle_rad), std::sin(angle_rad));
 
-        // top = 远离中心的长轴端点（视觉上偏上或偏右），bottom = 另一端
-        const cv::Point2f top = center + dir * half_len;
-        const cv::Point2f bottom = center - dir * half_len;
+        cv::Point2f top = center + dir * half_len;
+        cv::Point2f bottom = center - dir * half_len;
+        if (top.y > bottom.y) std::swap(top, bottom);
         return {top, bottom};
     }
 

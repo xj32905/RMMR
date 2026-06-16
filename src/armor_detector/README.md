@@ -117,11 +117,11 @@ ros2 launch armor_detector detector.launch.py debug:=true debug_mode:=result
 
 ### 6.4 W7 ONNX 数字识别预接入
 
-ONNX 数字识别接口已预接入，默认关闭。待 `tiny_resnet.onnx` 模型文件、输入尺寸、类别顺序和预处理方式确认后，再启用 `onnx_enabled:=true` 进行实测。
+ONNX 数字识别接口已预接入，默认关闭。当前已在 `/home/xj/Downloads/tiny_resnet.onnx` 找到模型，并验证 OpenCV DNN 可加载、测试输入 `1×1×32×32` 可 forward、输出维度为 `1×9`。仍需真实相机/装甲板画面完成最终实测。
 
 ```bash
-# 预接入启动示例（需先确认 tiny_resnet.onnx 和模型元数据）
-ros2 launch armor_detector detector.launch.py onnx_enabled:=true onnx_model_path:=/path/to/tiny_resnet.onnx
+# ONNX 实测启动示例
+ros2 launch armor_detector detector.launch.py onnx_enabled:=true onnx_model_path:=/home/xj/Downloads/tiny_resnet.onnx
 ```
 
 ### 6.5 运行时调参
@@ -252,10 +252,14 @@ BGR 图像
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
-| `onnx_enabled` | false | true=启用 ONNX 数字识别 |
-| `onnx_model_path` | "" | `tiny_resnet.onnx` 模型文件路径 |
+| `roi_debug_save` | true | 保存 ROI 与 `32×32` 输入图，便于继续收集重训样本 |
+| `roi_debug_dir` | `src/armor_detector/docs/week7_roi_samples` | ROI 样本输出目录 |
+| `roi_debug_max_count` | 100 | 单次运行最多保存的 ROI 样本数量 |
+| `onnx_enabled` | false | true=启用 ONNX 数字识别；当前默认关闭以避免分类模型不稳定影响检测链路 |
+| `onnx_model_path` | `/home/xj/rm_test/assets/tiny_resnet.onnx` | `tiny_resnet.onnx` 模型文件路径 |
+| `not_armor_threshold` | 0.7 | 模型输出 `not_armor` 且置信度超过阈值时，该分类结果不写入 `digit_label` |
 
-启用后 `/armor/result` 中每个 armor 的 `digit_label` 和 `confidence` 字段会填入数字分类结果，调试图像上标注数字标签。当前仅为接口预接入，尚未用真实 `tiny_resnet.onnx` 完成验证。
+启用后 `/armor/result` 中每个 armor 的 `digit_label` 和 `confidence` 字段会填入数字分类结果，调试图像上标注数字标签。当前模型文件已找到并通过 OpenCV DNN 加载验证，W3 视频链路也能运行；但 raw top-3 日志显示当前 `tiny_resnet.onnx` 对实测 ROI 明显偏向 `not_armor`，因此数字识别准确率尚未验证。
 
 当前预处理实现：灰度单通道 → 等比缩放 → 黑底填充 32×32 → 像素归一化 [0,1]。
 当前标签映射占位：0:one, 1:two, 2:three, 3:four, 4:five, 5:sentry, 6:outpost, 7:base, 8:not_armor。实际使用前需以模型训练配置为准。
@@ -295,7 +299,7 @@ ros2 run armor_detector detector_node --ros-args --params-file install/armor_det
 1. **背景误检**：场地红/蓝色长条形物体会通过 HSV + 长宽比筛选，产生伪灯条。W6 已加入 `strict_lightbar_filter`（角度+填充率）和 `pair_validation`（几何配对验证），需真实场景验证效果。
 2. **远距离漏检**：远距离灯条在图像中很小（<5px），mask 中只有 1~2 像素宽，`contourArea` 接近零，依赖 `boundingRect` 面积。
 3. **光照敏感**：过曝/低照度场景下 HSV mask 可能失效，需要调节曝光或 S/V 阈值。
-4. **ONNX 待验证**：ONNX 数字识别接口已预接入，默认关闭；待 `tiny_resnet.onnx` 模型文件、输入尺寸、类别顺序和预处理方式确认后，再启用实测。
+4. **ONNX 分类输入仍需优化**：模型 `/home/xj/rm_test/assets/tiny_resnet.onnx` 已找到并可加载，W3 视频链路可运行，但当前 `/armor/result` 中 `digit_label` 仍为空。已保存 `roi_*.png` 和 `roi_*_input32.png`，样例显示透视裁剪后数字仍可能靠边或被灯条干扰。
 5. **真实多装甲板场景待验证**：当前代码已支持多个灯条两两配对和多个 armor 输出，但仍需真实多目标画面验证误配对情况。
 
 ### W6 状态（已完成本轮真实相机调试）
@@ -306,14 +310,17 @@ ros2 run armor_detector detector_node --ros-args --params-file install/armor_det
 - 已调整：`max_contour_area` 提高到 `50000.0`，恢复 result 模式输出
 - 后续：拿到标准装甲板后继续确认最终稳定参数
 
-### W7 状态（预接入，未完成 ONNX 实测）
+### W7 状态（ONNX 已接入，分类结果待稳定）
 
 - ROI 保存调试接口已加入，默认关闭
-- ONNX 数字识别接口已预接入（`onnx_classifier.hpp` + `detector_node.cpp` 集成），默认关闭
+- ROI 已从 `boundingRect` 升级为四点 `warpPerspective` 透视裁剪
+- ROI 调试会同时保存 `roi_*.png` 和模型输入 `roi_*_input32.png`
+- ONNX 数字识别接口已接入（`onnx_classifier.hpp` + `detector_node.cpp` 集成），默认关闭
 - `points` 已改为固定 `std::array<cv::Point2f, 4>`
 - 检测结果已支持同一帧多个装甲板
 - 输出已改为 ROS2 结构化消息 `/armor/result`，类型为 `armor_interfaces/msg/Armors`
-- 待做：确认 `tiny_resnet.onnx`、输入尺寸、类别顺序、预处理方式 → `onnx_enabled:=true` → 真实效果验证 → 错误案例分析
+- 已找到模型 `/home/xj/rm_test/assets/tiny_resnet.onnx`，OpenCV DNN 可加载，测试输入 `1×1×32×32`，输出 `1×9`
+- W3 视频验证结果：检测和 ONNX 链路可运行，但 `digit_label` 仍为空，需继续优化四点质量、类别映射或预处理匹配
 
 ## 12. 运行截图与调试
 

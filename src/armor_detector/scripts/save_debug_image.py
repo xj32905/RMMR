@@ -10,15 +10,35 @@ import sys
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image
-from cv_bridge import CvBridge
 import cv2
+import numpy as np
+
+
+def image_msg_to_bgr8(msg):
+    if msg.encoding not in {"bgr8", "rgb8", "mono8"}:
+        raise ValueError(f"unsupported image encoding: {msg.encoding}")
+
+    channels = 1 if msg.encoding == "mono8" else 3
+    expected_step = msg.width * channels
+    data = np.frombuffer(msg.data, dtype=np.uint8)
+    if msg.step < expected_step:
+        raise ValueError(f"invalid image step: {msg.step} < {expected_step}")
+
+    rows = data.reshape((msg.height, msg.step))[:, :expected_step]
+    if channels == 1:
+        gray = rows.reshape((msg.height, msg.width))
+        return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+
+    img = rows.reshape((msg.height, msg.width, channels))
+    if msg.encoding == "rgb8":
+        return cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+    return img.copy()
 
 
 class SaveDebugImageNode(Node):
     def __init__(self, output_path):
         super().__init__("save_debug_image")
         self.output_path = output_path
-        self.bridge = CvBridge()
         self.sub = self.create_subscription(
             Image, "/armor/debug_image", 
             self.on_image, 
@@ -31,7 +51,7 @@ class SaveDebugImageNode(Node):
         if self.saved:
             return
         try:
-            cv_img = self.bridge.imgmsg_to_cv2(msg, "bgr8")
+            cv_img = image_msg_to_bgr8(msg)
             cv2.imwrite(self.output_path, cv_img)
             self.get_logger().info(f"已保存: {self.output_path}")
             self.saved = True

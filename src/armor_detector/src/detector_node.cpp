@@ -121,7 +121,7 @@ private:
             std::vector<armor_detect::ClassifyResult> labels;
             if (onnx_enabled_) {
                 for (const auto& armor : result.armors) {
-                    labels.push_back(classifier_.classify(img, armor.points, not_armor_threshold_));
+                    labels.push_back(classifier_.classify(img, armor.points, not_armor_threshold_, debug_));
                 }
             }
 
@@ -189,24 +189,18 @@ private:
         for (size_t i = 0; i < result.armors.size() && roi_save_count_ < max_count; ++i) {
             const auto& armor = result.armors[i];
 
-            std::vector<cv::Point> int_pts;
-            int_pts.reserve(4);
-            for (const auto& p : armor.points) int_pts.emplace_back(cvRound(p.x), cvRound(p.y));
-            cv::Rect box = cv::boundingRect(int_pts);
+            const cv::Mat roi = armor_detect::OnnxClassifier::cropDigitRoi(img, armor.points);
+            if (roi.empty()) continue;
 
-            const int mw = cvRound(box.width * 0.15);
-            const int mh = cvRound(box.height * 0.15);
-            box.x = std::max(0, box.x - mw);
-            box.y = std::max(0, box.y - mh);
-            box.width = std::min(img.cols - box.x, box.width + 2 * mw);
-            box.height = std::min(img.rows - box.y, box.height + 2 * mh);
-            if (box.width <= 0 || box.height <= 0) continue;
-
-            const cv::Mat roi = img(box).clone();
-            const std::string path = dir + "/roi_" + std::to_string(roi_save_count_) + "_" + armor.color + ".png";
-            if (cv::imwrite(path, roi)) {
+            const cv::Mat input = armor_detect::OnnxClassifier::preprocessForDebug(roi);
+            const std::string stem = "/roi_" + std::to_string(roi_save_count_) + "_" + armor.color;
+            const std::string roi_path = dir + stem + ".png";
+            const std::string input_path = dir + stem + "_input32.png";
+            bool saved = cv::imwrite(roi_path, roi);
+            if (!input.empty()) saved = cv::imwrite(input_path, input) && saved;
+            if (saved) {
                 ++roi_save_count_;
-                RCLCPP_INFO(get_logger(), "保存 ROI 样例: %s", path.c_str());
+                RCLCPP_INFO(get_logger(), "保存 ROI 样例: %s", roi_path.c_str());
             }
         }
     }
