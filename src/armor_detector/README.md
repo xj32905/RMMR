@@ -250,19 +250,67 @@ BGR 图像
 
 ### 9.5 W7 ONNX 数字识别
 
+#### 9.5.1 模型输入规格
+
+| 项目 | 值 | 说明 |
+|------|-----|------|
+| 输入尺寸 | `1 × 1 × 32 × 32` (NCHW) | batch=1，通道=1，宽高=32×32 |
+| 输入通道 | 单通道灰度 | ROI 先转灰度再送入网络 |
+| 缩放方式 | 等比缩放 + 黑底填充 | 长边等比缩到 32，短边保持比例，整体置于 32×32 黑色画布中央 |
+| 归一化 | 像素值 ÷ 255.0 | 将 `[0, 255]` 映射到 `[0.0, 1.0]` |
+| 数据格式 | NCHW | 由 `cv::dnn::blobFromImage` 生成，形状 `[1, 1, 32, 32]` |
+
+#### 9.5.2 类别映射
+
+模型输出 `1 × 9`，经过 softmax 后取 argmax，索引与标签对应关系如下（定义在 `onnx_classifier.hpp` 的 `LABEL_NAMES`）：
+
+| 输出索引 | 标签 | 含义 |
+|----------|------|------|
+| 0 | `one` | 数字 1 |
+| 1 | `two` | 数字 2 |
+| 2 | `three` | 数字 3 |
+| 3 | `four` | 数字 4 |
+| 4 | `five` | 数字 5 |
+| 5 | `sentry` | 哨兵 |
+| 6 | `outpost` | 前哨站 |
+| 7 | `base` | 基地 |
+| 8 | `not_armor` | 非装甲板 / 背景误检 |
+
+#### 9.5.3 ROI 如何从装甲板检测结果中裁出
+
+数字识别 ROI 完全基于 `Armor.points`（检测到的装甲板四点，顺序：左上→右上→右下→左下），流程如下：
+
+1. **透视变换拉正**：用 `cv::getPerspectiveTransform` + `cv::warpPerspective` 把倾斜的装甲板四点映射为正视矩形，得到 `plate_width × plate_height` 的装甲板正视图。
+2. **去边距**：去掉左右 8%、上下 6% 的边距，剔除灯条边缘，只保留中间数字区域。
+3. **灰度转换**：把 BGR ROI 转成单通道灰度。
+4. **等比缩放**：把灰度图长边缩放到 32，短边按比例缩放。
+5. **黑底填充**：将缩放后的图像居中放到 32×32 的黑色画布上。
+6. **归一化 blob**：用 `cv::dnn::blobFromImage(..., 1.0/255.0, ...)` 生成 `[1, 1, 32, 32]` 的 float blob。
+
+实现位置：`include/armor_detector/onnx_classifier.hpp` 中的 `cropDigitRoi()` 和 `preprocess()`。
+
+#### 9.5.4 运行参数
+
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
 | `roi_debug_save` | true | 保存 ROI 与 `32×32` 输入图，便于继续收集重训样本 |
 | `roi_debug_dir` | `src/armor_detector/docs/week7_roi_samples` | ROI 样本输出目录 |
 | `roi_debug_max_count` | 100 | 单次运行最多保存的 ROI 样本数量 |
-| `onnx_enabled` | false | true=启用 ONNX 数字识别；当前默认关闭以避免分类模型不稳定影响检测链路 |
+| `onnx_enabled` | false | true=启用 ONNX 数字识别 |
 | `onnx_model_path` | `/home/xj/rm_test/assets/tiny_resnet.onnx` | `tiny_resnet.onnx` 模型文件路径 |
 | `not_armor_threshold` | 0.7 | 模型输出 `not_armor` 且置信度超过阈值时，该分类结果不写入 `digit_label` |
 
-启用后 `/armor/result` 中每个 armor 的 `digit_label` 和 `confidence` 字段会填入数字分类结果，调试图像上标注数字标签。当前模型文件已找到并通过 OpenCV DNN 加载验证，W3 视频链路也能运行；但 raw top-3 日志显示当前 `tiny_resnet.onnx` 对实测 ROI 明显偏向 `not_armor`，因此数字识别准确率尚未验证。
+启动示例：
 
-当前预处理实现：灰度单通道 → 等比缩放 → 黑底填充 32×32 → 像素归一化 [0,1]。
-当前标签映射占位：0:one, 1:two, 2:three, 3:four, 4:five, 5:sentry, 6:outpost, 7:base, 8:not_armor。实际使用前需以模型训练配置为准。
+```bash
+ros2 launch armor_detector detector.launch.py onnx_enabled:=true onnx_model_path:=/home/xj/rm_test/assets/tiny_resnet.onnx
+```
+
+#### 9.5.5 当前状态
+
+- 检测、配对、ROI 裁剪、ONNX 推理链路已全部打通。
+- `/armor/result` 中每个 armor 的 `digit_label` 和 `confidence` 字段已按上述类别映射填充。
+- 当前 `tiny_resnet.onnx` 对实测 ROI 明显偏向 `not_armor`（置信度 >0.99），因此数字识别准确率尚未验证，需与模型训练方确认训练配置、类别分布及预处理一致性。
 
 ## 10. Bag / 相机切换步骤
 
