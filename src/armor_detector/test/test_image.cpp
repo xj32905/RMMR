@@ -1,4 +1,5 @@
 #include <armor_detector/armor_detect_core.hpp>
+#include <armor_detector/onnx_classifier.hpp>
 #include <opencv2/opencv.hpp>
 #include <iostream>
 #include <filesystem>
@@ -23,12 +24,14 @@ int main(int argc, char** argv) {
     p.debug_mode = "result";
     p.target_color = "red";
     p.target_width = 1280;
-    p.gamma = 0.5;               // 这张图不算极暗，gamma 0.5 适中
-    p.s_min = 30;
-    p.v_min = 20;
-    p.min_contour_area = 5.0;
+
+    // 针对清晰装甲板照片
+    p.gamma = 1.0;
+    p.s_min = 60;
+    p.v_min = 80;
+    p.min_contour_area = 20.0;
     p.max_contour_area = 50000.0;
-    p.min_aspect_ratio = 1.2;    // 灯条可能有倾斜，放宽一点
+    p.min_aspect_ratio = 2.0;
     p.pair_validation = true;
     p.strict_lightbar_filter = false;
 
@@ -45,27 +48,41 @@ int main(int argc, char** argv) {
     cv::imwrite(debug_path, result.debug_image);
     std::cout << "保存 debug: " << debug_path << std::endl;
 
-    // 保存每个装甲板的 ROI
+    // 加载 ONNX 模型
+    armor_detect::OnnxClassifier classifier;
+    const std::string model_path = "/home/xj/rm_test/assets/tiny_resnet.onnx";
+    bool onnx_ok = classifier.loadModel(model_path);
+    std::cout << "ONNX 模型加载: " << (onnx_ok ? "成功" : "失败") << std::endl;
+
     for (size_t i = 0; i < result.armors.size(); ++i) {
         const auto& armor = result.armors[i];
-        std::vector<cv::Point> pts;
-        pts.reserve(4);
-        for (const auto& pt : armor.points) pts.emplace_back(cvRound(pt.x), cvRound(pt.y));
-        cv::Rect box = cv::boundingRect(pts);
 
-        // 加 10% margin
-        int mw = cvRound(box.width * 0.1);
-        int mh = cvRound(box.height * 0.1);
-        box.x = std::max(0, box.x - mw);
-        box.y = std::max(0, box.y - mh);
-        box.width = std::min(img.cols - box.x, box.width + 2 * mw);
-        box.height = std::min(img.rows - box.y, box.height + 2 * mh);
+        // 保存 classify() 内部 cropDigitRoi() 裁出的 ROI（BGR）
+        cv::Mat crop_roi = armor_detect::OnnxClassifier::cropDigitRoi(img, armor.points);
+        if (!crop_roi.empty()) {
+            std::string crop_path = out_dir + "/test_crop_roi_" + std::to_string(i) + ".png";
+            cv::imwrite(crop_path, crop_roi);
+            std::cout << "保存 cropDigitRoi: " << crop_path
+                      << " size=" << crop_roi.cols << "x" << crop_roi.rows << std::endl;
+        }
 
-        if (box.width <= 0 || box.height <= 0) continue;
-        cv::Mat roi = img(box).clone();
-        std::string roi_path = out_dir + "/test_roi_" + std::to_string(i) + "_" + armor.color + ".png";
-        cv::imwrite(roi_path, roi);
-        std::cout << "保存 ROI: " << roi_path << " size=" << roi.cols << "x" << roi.rows << std::endl;
+        // ONNX 分类（开启 debug_log）
+        if (onnx_ok) {
+            armor_detect::ClassifyResult cls = classifier.classify(img, armor.points, 0.7f, true);
+            std::cout << "  -> ONNX 分类结果: "
+                      << (cls.valid ? cls.label_text : "INVALID")
+                      << " 置信度=" << cls.confidence
+                      << " label_id=" << cls.label_id << std::endl;
+
+            // 保存模型实际看到的 32x32 输入图
+            cv::Mat input32 = classifier.lastDebugInput();
+            if (!input32.empty()) {
+                std::string input_path = out_dir + "/test_input32_" + std::to_string(i) + ".png";
+                cv::imwrite(input_path, input32);
+                std::cout << "  保存模型输入: " << input_path
+                          << " size=" << input32.cols << "x" << input32.rows << std::endl;
+            }
+        }
     }
 
     return 0;

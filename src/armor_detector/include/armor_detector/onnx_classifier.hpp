@@ -111,43 +111,35 @@ public:
 
     const cv::Mat& lastDebugInput() const { return last_debug_input_; }
 
+    /// 从原图中裁出数字 ROI。
+    /// 策略：基于装甲板四点中心，取中心正方形区域，使数字在 ROI 中占比较大，
+    /// 便于后续缩放到 32×32 时保留清晰特征。
     static cv::Mat cropDigitRoi(const cv::Mat& bgr,
                                 const std::array<cv::Point2f, 4>& pts) {
-        const cv::Point2f top_left = pts[0];
-        const cv::Point2f top_right = pts[1];
-        const cv::Point2f bottom_right = pts[2];
-        const cv::Point2f bottom_left = pts[3];
+        // 计算四点中心
+        cv::Point2f center(0.0f, 0.0f);
+        for (const auto& p : pts) center += p;
+        center *= 0.25f;
 
-        const double top_width = cv::norm(top_right - top_left);
-        const double bottom_width = cv::norm(bottom_right - bottom_left);
-        const double left_height = cv::norm(bottom_left - top_left);
-        const double right_height = cv::norm(bottom_right - top_right);
+        // 计算四点 bounding box，用其长边的 60% 作为中心正方形边长
+        std::vector<cv::Point> int_pts;
+        int_pts.reserve(4);
+        for (const auto& p : pts) int_pts.emplace_back(cvRound(p.x), cvRound(p.y));
+        cv::Rect box = cv::boundingRect(int_pts);
+        int side = static_cast<int>(std::max(box.width, box.height) * 0.6f);
+        side = std::max(16, std::min(side, std::min(bgr.cols, bgr.rows)));
 
-        const int plate_width = std::max(16, cvRound(std::max(top_width, bottom_width)));
-        const int plate_height = std::max(16, cvRound(std::max(left_height, right_height)));
+        cv::Rect roi_rect;
+        roi_rect.x = static_cast<int>(center.x) - side / 2;
+        roi_rect.y = static_cast<int>(center.y) - side / 2;
+        roi_rect.width = side;
+        roi_rect.height = side;
 
-        std::array<cv::Point2f, 4> dst = {
-            cv::Point2f(0.0f, 0.0f),
-            cv::Point2f(static_cast<float>(plate_width - 1), 0.0f),
-            cv::Point2f(static_cast<float>(plate_width - 1), static_cast<float>(plate_height - 1)),
-            cv::Point2f(0.0f, static_cast<float>(plate_height - 1))
-        };
-
-        cv::Mat transform = cv::getPerspectiveTransform(pts.data(), dst.data());
-        cv::Mat warped;
-        cv::warpPerspective(bgr, warped, transform, cv::Size(plate_width, plate_height));
-        if (warped.empty()) return {};
-
-        const int margin_x = std::max(1, cvRound(plate_width * 0.08f));
-        const int margin_y = std::max(1, cvRound(plate_height * 0.06f));
-        int x = margin_x;
-        int y = margin_y;
-        int w = std::max(1, plate_width - 2 * margin_x);
-        int h = std::max(1, plate_height - 2 * margin_y);
-        if (x + w > warped.cols) w = warped.cols - x;
-        if (y + h > warped.rows) h = warped.rows - y;
-        if (w <= 0 || h <= 0) return {};
-        return warped(cv::Rect(x, y, w, h)).clone();
+        // 边界限制
+        roi_rect.x = std::max(0, std::min(roi_rect.x, bgr.cols - side));
+        roi_rect.y = std::max(0, std::min(roi_rect.y, bgr.rows - side));
+        if (roi_rect.width <= 0 || roi_rect.height <= 0) return {};
+        return bgr(roi_rect).clone();
     }
 
     static cv::Mat preprocessForDebug(const cv::Mat& roi) {
@@ -160,8 +152,11 @@ public:
             gray = roi.clone();
         }
 
+        // 课程要求：输出 32×32 单通道黑底图。
+        // 训练数据中数字并非撑满 32×32，周围有黑边，因此先缩放到 inner 尺寸再居中。
         const int target = 32;
-        double scale = static_cast<double>(target) / std::max(gray.cols, gray.rows);
+        const int inner = 24;
+        double scale = static_cast<double>(inner) / std::max(gray.cols, gray.rows);
         cv::Mat resized;
         cv::resize(gray, resized, cv::Size(), scale, scale, cv::INTER_LINEAR);
 
@@ -181,8 +176,11 @@ private:
             gray = roi.clone();
         }
 
+        // 课程要求：输出 32×32 单通道黑底图。
+        // 训练数据中数字占比约为 inner/target，保留黑边更匹配分布。
         const int target = 32;
-        double scale = static_cast<double>(target) / std::max(gray.cols, gray.rows);
+        const int inner = 24;
+        double scale = static_cast<double>(inner) / std::max(gray.cols, gray.rows);
         cv::Mat resized;
         cv::resize(gray, resized, cv::Size(), scale, scale, cv::INTER_LINEAR);
 
