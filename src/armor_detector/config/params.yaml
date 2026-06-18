@@ -1,7 +1,7 @@
 detector_node:
   ros__parameters:
     debug: true
-    debug_mode: "red_mask"   # 先改成 red_mask，看 HSV 分割效果
+    debug_mode: "result"   # result=结果图，red_mask/blue_mask=看颜色分割，candidates=看候选灯条
     target_color: "red"      # red / blue / all
     target_width: 1280
     gamma: 0.3               # 视频极暗，gamma<1 增强暗部灯条
