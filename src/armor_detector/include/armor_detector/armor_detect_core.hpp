@@ -70,7 +70,18 @@ struct ColorResult {
 struct Armor {
     std::string color;
     std::array<cv::Point2f, 4> points;
+    cv::Rect2f digit_roi;  // 数字 ROI：从灯条中心构造的居中矩形
 };
+
+// 从两根灯条构造装甲板数字 ROI
+inline cv::Rect2f getArmorRectFromBars(const Bar& left, const Bar& right) {
+    cv::Point2f lc = left.rect.center;
+    cv::Point2f rc = right.rect.center;
+    float w = cv::norm(rc - lc);                       // 灯条间距 = 框宽
+    float h = static_cast<float>((left.length + right.length) / 2.0);  // 灯条均长 = 框高
+    cv::Point2f center = (lc + rc) * 0.5f;
+    return cv::Rect2f(center.x - w * 0.5f, center.y - h * 0.5f, w, h);
+}
 
 struct Result {
     cv::Mat debug_image;
@@ -241,15 +252,34 @@ private:
         return bars;
     }
 
-    // 全排列配对：所有满足几何约束的灯条组合都生成装甲板
+    // 灯条配对：贪心匹配，每个灯条最多用一次，按 score 降序
     std::vector<Armor> matchArmors(const std::vector<Bar>& bars, bool is_red, const Params& p) const {
         std::vector<Armor> armors;
+        std::vector<bool> used(bars.size(), false);
+
+        // 收集所有有效配对，按综合评分排序
+        struct Pair { size_t i, j; double score; };
+        std::vector<Pair> candidates;
         for (size_t i = 0; i < bars.size(); ++i) {
             for (size_t j = i + 1; j < bars.size(); ++j) {
                 if (p.pair_validation && !validatePair(bars[i], bars[j])) continue;
-                auto quad = armorQuad(bars[i].rect, bars[j].rect);
-                armors.push_back({is_red ? "red" : "blue", quad});
+                double s = bars[i].score + bars[j].score;  // 综合评分
+                candidates.push_back({i, j, s});
             }
+        }
+        std::sort(candidates.begin(), candidates.end(),
+                  [](const Pair& a, const Pair& b) { return a.score > b.score; });
+
+        // 贪心选择：最高分配对优先，已用的跳过
+        for (const auto& c : candidates) {
+            if (used[c.i] || used[c.j]) continue;
+            auto quad = armorQuad(bars[c.i].rect, bars[c.j].rect);
+            // 用灯条中心构造居中数字 ROI
+            auto roi = getArmorRectFromBars(
+                bars[c.i].rect.center.x < bars[c.j].rect.center.x ? bars[c.i] : bars[c.j],
+                bars[c.i].rect.center.x < bars[c.j].rect.center.x ? bars[c.j] : bars[c.i]);
+            armors.push_back({is_red ? "red" : "blue", quad, roi});
+            used[c.i] = used[c.j] = true;
         }
         return armors;
     }

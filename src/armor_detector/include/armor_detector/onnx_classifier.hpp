@@ -43,13 +43,14 @@ public:
     bool isLoaded() const { return loaded_; }
 
     ClassifyResult classify(const cv::Mat& bgr,
-                            const std::array<cv::Point2f, 4>& armor_points,
+                            const cv::Rect2f& armor_rect,
                             float not_armor_threshold = 0.7f,
-                            bool debug_log = false) {
+                            bool debug_log = false,
+                            float vertical_bias = 0.25f) {
         ClassifyResult out;
         if (!loaded_ || bgr.empty()) return out;
 
-        cv::Mat roi = cropDigitRoi(bgr, armor_points);
+        cv::Mat roi = cropDigitRoi(bgr, armor_rect, vertical_bias);
         if (roi.empty()) return out;
 
         cv::Mat debug_input = preprocessForDebug(roi);
@@ -102,6 +103,11 @@ public:
             out.confidence = static_cast<float>(max_val);
             out.valid = true;
 
+            // 低置信度抑制：仅当 top-1 不是 not_armor 且置信度不足时压制
+            // not_armor 由其专属阈值控制，避免误杀正常分类
+            if (out.label_text != "not_armor" && max_val < 0.45) {
+                out.valid = false;
+            }
             if (out.label_text == "not_armor" && out.confidence >= not_armor_threshold) {
                 out.valid = false;
             }
@@ -112,34 +118,25 @@ public:
     const cv::Mat& lastDebugInput() const { return last_debug_input_; }
 
     /// 从原图中裁出数字 ROI。
-    /// 策略：基于装甲板四点中心，取中心正方形区域，使数字在 ROI 中占比较大，
-    /// 便于后续缩放到 32×32 时保留清晰特征。
-    static cv::Mat cropDigitRoi(const cv::Mat& bgr,
-                                const std::array<cv::Point2f, 4>& pts) {
-        // 计算四点中心
-        cv::Point2f center(0.0f, 0.0f);
-        for (const auto& p : pts) center += p;
-        center *= 0.25f;
+    /// 策略：居中矩形 + 垂直偏移 — 宽 1.0x，高 1.0x，中心可上下偏移。
+    static cv::Mat cropDigitRoi(const cv::Mat& bgr, const cv::Rect2f& armor_rect,
+                                float vertical_bias = 0.25f) {
+        float roi_w = armor_rect.width;
+        float roi_h = armor_rect.height;
+        float side = std::max(roi_w, roi_h);
+        side = std::max(16.0f, std::min(side, static_cast<float>(std::min(bgr.cols, bgr.rows))));
 
-        // 计算四点 bounding box，用其长边的 60% 作为中心正方形边长。
-        std::vector<cv::Point> int_pts;
-        int_pts.reserve(4);
-        for (const auto& p : pts) int_pts.emplace_back(cvRound(p.x), cvRound(p.y));
-        cv::Rect box = cv::boundingRect(int_pts);
-        int side = static_cast<int>(std::max(box.width, box.height) * 0.60f);
-        side = std::max(16, std::min(side, std::min(bgr.cols, bgr.rows)));
+        float cx = armor_rect.x + armor_rect.width * 0.5f;
+        float cy = armor_rect.y + armor_rect.height * (0.5f + vertical_bias);
 
-        cv::Rect roi_rect;
-        roi_rect.x = static_cast<int>(center.x) - side / 2;
-        roi_rect.y = static_cast<int>(center.y) - side / 2;
-        roi_rect.width = side;
-        roi_rect.height = side;
+        cv::Rect roi;
+        roi.x = std::max(0, cvRound(cx - side * 0.5f));
+        roi.y = std::max(0, cvRound(cy - side * 0.5f));
+        roi.width = std::min(cvRound(side), bgr.cols - roi.x);
+        roi.height = std::min(cvRound(side), bgr.rows - roi.y);
 
-        // 边界限制
-        roi_rect.x = std::max(0, std::min(roi_rect.x, bgr.cols - side));
-        roi_rect.y = std::max(0, std::min(roi_rect.y, bgr.rows - side));
-        if (roi_rect.width <= 0 || roi_rect.height <= 0) return {};
-        return bgr(roi_rect).clone();
+        if (roi.width <= 0 || roi.height <= 0) return {};
+        return bgr(roi).clone();
     }
 
     static cv::Mat preprocessForDebug(const cv::Mat& roi) {

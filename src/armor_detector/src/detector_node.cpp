@@ -9,7 +9,9 @@
 #include <armor_detector/onnx_classifier.hpp>
 
 #include <algorithm>
+#include <deque>
 #include <filesystem>
+#include <map>
 #include <sstream>
 #include <string>
 
@@ -25,6 +27,7 @@ public:
         declare_parameter("onnx_enabled", false);
         declare_parameter("onnx_model_path", "");
         declare_parameter("not_armor_threshold", 0.7);
+        declare_parameter("vertical_bias", 0.25);  // ROI 垂直偏移，正值=下移
 
         sub_ = create_subscription<sensor_msgs::msg::Image>(
             "/camera/image", rclcpp::SensorDataQoS(),
@@ -121,7 +124,39 @@ private:
             std::vector<armor_detect::ClassifyResult> labels;
             if (onnx_enabled_) {
                 for (const auto& armor : result.armors) {
-                    labels.push_back(classifier_.classify(img, armor.points, not_armor_threshold_, debug_));
+                    float vb = static_cast<float>(get_parameter("vertical_bias").as_double());
+                    labels.push_back(classifier_.classify(img, armor.digit_roi, not_armor_threshold_, debug_, vb));
+                }
+            }
+
+            // 时间滤波：5 帧历史，2 票通过，桥接 crop 不稳定的帧
+            std::vector<std::pair<std::string, float>> frame_labels;
+            for (const auto& l : labels) {
+                frame_labels.emplace_back(l.valid ? l.label_text : "", l.confidence);
+            }
+            history_.push_back(frame_labels);
+            if (history_.size() > 5) history_.pop_front();
+
+            for (size_t i = 0; i < labels.size() && i < result.armors.size(); ++i) {
+                std::map<std::string, std::pair<int, float>> votes;
+                for (const auto& hist : history_) {
+                    if (i < hist.size() && !hist[i].first.empty()) {
+                        auto& v = votes[hist[i].first];
+                        v.first++;
+                        v.second = std::max(v.second, hist[i].second);
+                    }
+                }
+                std::string best; int best_votes = 0; float best_conf = 0.0f;
+                for (const auto& v : votes) {
+                    if (v.second.first > best_votes) {
+                        best = v.first; best_votes = v.second.first; best_conf = v.second.second;
+                    }
+                }
+                // 只做正向覆盖：历史投票到有效标签时才覆盖，不反向压制
+                if (best_votes >= 2 && !best.empty() && best != "not_armor") {
+                    labels[i].label_text = best;
+                    labels[i].confidence = best_conf;
+                    labels[i].valid = true;
                 }
             }
 
@@ -189,7 +224,7 @@ private:
         for (size_t i = 0; i < result.armors.size() && roi_save_count_ < max_count; ++i) {
             const auto& armor = result.armors[i];
 
-            const cv::Mat roi = armor_detect::OnnxClassifier::cropDigitRoi(img, armor.points);
+            const cv::Mat roi = armor_detect::OnnxClassifier::cropDigitRoi(img, armor.digit_roi);
             if (roi.empty()) continue;
 
             const cv::Mat input = armor_detect::OnnxClassifier::preprocessForDebug(roi);
@@ -243,6 +278,9 @@ private:
     int log_interval_ms_ = 1000;
     int roi_save_count_ = 0;
     rclcpp::Time last_log_;
+
+    // 时间稳定性：最近 N 帧的标签历史
+    std::deque<std::vector<std::pair<std::string, float>>> history_;
 
     rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr sub_;
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr debug_pub_;

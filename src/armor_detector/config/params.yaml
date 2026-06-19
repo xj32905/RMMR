@@ -37,7 +37,8 @@ detector_node:
     roi_debug_max_count: 20
     onnx_enabled: true            # true=启用 ONNX 数字识别
     onnx_model_path: "/home/xj/rm_test/assets/tiny_resnet.onnx"  # tiny_resnet.onnx 模型路径
-    not_armor_threshold: 1.0       # 若模型输出 not_armor 且置信度超过此阈值，则丢弃该分类结果
+    not_armor_threshold: 0.7       # 若模型输出 not_armor 且置信度超过此阈值，则丢弃该分类结果
+    vertical_bias: 0.25             # ROI 垂直偏移（h 的倍数），正值=下移，最优 0.25
 
 camera_node:
   ros__parameters:
