@@ -10,3 +10,36 @@
 *.pth
 *.pt
 hello
+
+# W4 临时文件
+W4/build/
+W4/install/
+W4/log/
+
+# debug 和测试图片
+src/armor_detector/docs/test_*.png
+src/armor_detector/docs/w7_debug_*.png
+src/armor_detector/docs/w7_submit_*.png
+src/armor_detector/docs/w7_result_*.png
+src/armor_detector/docs/week7_roi_samples/
+src/armor_detector/docs/week7_digit_dataset/
+
+# 备份和临时文件
+*.bak
+*.save
+*.save.*
+__pycache__/
+*.pyc
+
+# 其他无关
+out/
+tmp/
+test_image
+DM_IMU/
+MvSdkLog/
+armor_detection/
+village_interfaces/
+village_li/
+village_wang/
+serial/
+image_pub.py.*
