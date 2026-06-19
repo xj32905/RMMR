@@ -4,12 +4,12 @@ detector_node:
     debug_mode: "result"   # result=结果图，red_mask/blue_mask=看颜色分割，candidates=看候选灯条
     target_color: "red"      # red / blue / all
     target_width: 1280
-    gamma: 0.3               # 视频极暗，gamma<1 增强暗部灯条
+    gamma: 1.0               # 1.0=不调整，<1 增强暗部，>1 压暗
     log_interval_ms: 1000
 
     # 1) 颜色分割：只负责把红/蓝区域从图像里抠出来
-    s_min: 70
-    v_min: 70
+    s_min: 60
+    v_min: 80
     r_thresh_low_h: 0
     r_thresh_high_h: 10
     r_thresh_low_h2: 170
@@ -20,9 +20,9 @@ detector_node:
     morph_open_size: 0
 
     # 2) 形态筛选：在 mask 结果里只留下“长条形”区域
-    min_contour_area: 5.0
+    min_contour_area: 20.0
     max_contour_area: 50000.0
-    min_aspect_ratio: 1.5
+    min_aspect_ratio: 2.0
     sort_by: "score"       # score=长边*长宽比 / length / area / aspect
 
     # 3) 装甲板配对：几何验证开关（阈值基于物理约束硬编码，W6 按需开启）
@@ -35,7 +35,7 @@ detector_node:
     roi_debug_save: false         # true=保存检测到的装甲板 ROI 样例，用于检查裁剪是否正确
     roi_debug_dir: "src/armor_detector/docs/week7_roi_samples"
     roi_debug_max_count: 20
-    onnx_enabled: false           # true=启用 ONNX 数字识别；当前模型实测偏向 not_armor，默认关闭以保护检测链路
+    onnx_enabled: true            # true=启用 ONNX 数字识别
     onnx_model_path: "/home/xj/rm_test/assets/tiny_resnet.onnx"  # tiny_resnet.onnx 模型路径
     not_armor_threshold: 0.7       # 若模型输出 not_armor 且置信度超过此阈值，则丢弃该分类结果
 
