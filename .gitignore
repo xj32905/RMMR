@@ -43,3 +43,6 @@ village_li/
 village_wang/
 serial/
 image_pub.py.*
+W4/Screenshot*.png
+W4/detector_node.cpp
+W4/*.zip
