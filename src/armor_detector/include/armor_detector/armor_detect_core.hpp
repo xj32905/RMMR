@@ -268,17 +268,23 @@ private:
             }
         }
 
+        // 灯条框：result 模式下只画细框不打标签，避免标注堆叠
         for (size_t i = 0; i < result.bars.size(); ++i) {
-            const auto& b = result.bars[i];
-            cv::rectangle(canvas, b.box, pass_color, 2);
-            cv::putText(canvas, cv::format("TOP%zu A%.0f L%.0f R%.1f S%.0f", i + 1, b.area, b.length, b.aspect, b.score),
-                        b.box.tl() + cv::Point(0, -4), cv::FONT_HERSHEY_SIMPLEX, 0.42, pass_color, 1);
+            cv::rectangle(canvas, result.bars[i].box, pass_color, draw_armor ? 1 : 2);
+            if (!draw_armor) {  // candidates 模式才打详细标签
+                const auto& b = result.bars[i];
+                cv::putText(canvas, cv::format("TOP%zu A%.0f L%.0f R%.1f S%.0f", i + 1, b.area, b.length, b.aspect, b.score),
+                            b.box.tl() + cv::Point(0, -4), cv::FONT_HERSHEY_SIMPLEX, 0.42, pass_color, 1);
+            }
         }
 
         for (size_t i = 0; i < armors.size(); ++i) {
             if (draw_armor) {
-                drawArmor(canvas, armors[i].points, armor_color,
-                          is_red ? cv::format("Red#%zu", i + 1) : cv::format("Blue#%zu", i + 1));
+                // 装甲板只画框，文字标注留给 detector_node 的 drawLabels
+                std::vector<cv::Point> pts;
+                pts.reserve(4);
+                for (const auto& p : armors[i].points) pts.emplace_back(cvRound(p.x), cvRound(p.y));
+                cv::polylines(canvas, pts, true, armor_color, 2);
             }
         }
     }

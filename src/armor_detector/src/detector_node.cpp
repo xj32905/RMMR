@@ -209,17 +209,21 @@ private:
                     const std::vector<armor_detect::ClassifyResult>& labels) {
         for (size_t i = 0; i < result.armors.size() && i < labels.size(); ++i) {
             if (!labels[i].valid) continue;
+            if (labels[i].label_text == "not_armor") continue;  // 跳过 not_armor，只画有效分类
             const auto& pts = result.armors[i].points;
             std::string tag = result.armors[i].color + "_" + labels[i].label_text;
-            cv::Point center(static_cast<int>((pts[0].x + pts[1].x + pts[2].x + pts[3].x) / 4.0f),
-                             static_cast<int>((pts[0].y + pts[1].y + pts[2].y + pts[3].y) / 4.0f));
-            cv::putText(img, tag, center + cv::Point(0, 22),
-                        cv::FONT_HERSHEY_SIMPLEX, 0.8, {0, 255, 255}, 2);
+            // 标注放在装甲板上方，用大字号黑底白字确保可读
+            cv::Point top(static_cast<int>((pts[0].x + pts[1].x) / 2.0f),
+                         static_cast<int>((pts[0].y + pts[1].y) / 2.0f) - 10);
+            cv::putText(img, tag, top,
+                        cv::FONT_HERSHEY_DUPLEX, 1.0, {0, 0, 0}, 5);  // black outline
+            cv::putText(img, tag, top,
+                        cv::FONT_HERSHEY_DUPLEX, 1.0, {0, 255, 255}, 2);  // yellow fill
         }
     }
 
     void drawHud(cv::Mat& img, const std::string& text) {
-        cv::putText(img, text, {10, 28}, cv::FONT_HERSHEY_SIMPLEX, 0.7, {0, 255, 0}, 2);
+        cv::putText(img, text, {10, 30}, cv::FONT_HERSHEY_SIMPLEX, 0.6, {0, 255, 0}, 2);
     }
 
     void log(const std::string& text) {

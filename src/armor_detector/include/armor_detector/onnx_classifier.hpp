@@ -121,12 +121,12 @@ public:
         for (const auto& p : pts) center += p;
         center *= 0.25f;
 
-        // 计算四点 bounding box，用其长边的 60% 作为中心正方形边长
+        // 计算四点 bounding box，用其长边的 60% 作为中心正方形边长。
         std::vector<cv::Point> int_pts;
         int_pts.reserve(4);
         for (const auto& p : pts) int_pts.emplace_back(cvRound(p.x), cvRound(p.y));
         cv::Rect box = cv::boundingRect(int_pts);
-        int side = static_cast<int>(std::max(box.width, box.height) * 0.6f);
+        int side = static_cast<int>(std::max(box.width, box.height) * 0.60f);
         side = std::max(16, std::min(side, std::min(bgr.cols, bgr.rows)));
 
         cv::Rect roi_rect;
