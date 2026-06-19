@@ -19,9 +19,6 @@ def generate_launch_description():
     bag_path = LaunchConfiguration('bag_path')
     debug = LaunchConfiguration('debug')
     debug_mode = LaunchConfiguration('debug_mode')
-    onnx_enabled = LaunchConfiguration('onnx_enabled')
-    onnx_model_path = LaunchConfiguration('onnx_model_path')
-
     return LaunchDescription([
 
         # ---- 启动参数声明 ----
@@ -37,12 +34,6 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'debug_mode', default_value='result',
             description='result / red_mask / blue_mask / candidates'),
-        DeclareLaunchArgument(
-            'onnx_enabled', default_value='false',
-            description='W7: true=启用 ONNX 数字识别'),
-        DeclareLaunchArgument(
-            'onnx_model_path', default_value='',
-            description='tiny_resnet.onnx 模型路径'),
 
         # ---- bag 模式：自动 ros2 bag play ----
         ExecuteProcess(
@@ -69,8 +60,6 @@ def generate_launch_description():
             parameters=[config, {
                 'debug': debug,
                 'debug_mode': debug_mode,
-                'onnx_enabled': onnx_enabled,
-                'onnx_model_path': onnx_model_path,
             }],
             output='screen',
         ),

@@ -115,13 +115,13 @@ ros2 launch armor_detector detector.launch.py debug_mode:=candidates
 ros2 launch armor_detector detector.launch.py debug:=true debug_mode:=result
 ```
 
-### 6.4 W7 ONNX 数字识别预接入
+### 6.4 W7 ONNX 数字识别
 
-ONNX 数字识别接口已预接入，默认关闭。当前已在 `/home/xj/Downloads/tiny_resnet.onnx` 找到模型，并验证 OpenCV DNN 可加载、测试输入 `1×1×32×32` 可 forward、输出维度为 `1×9`。仍需真实相机/装甲板画面完成最终实测。
+ONNX 数字识别已接入并默认启用。模型已集成到检测链路中，每帧检测的装甲板会自动裁剪数字 ROI、预处理 32×32 灰度图、送入 ONNX 推理并输出类别。
 
 ```bash
-# ONNX 实测启动示例
-ros2 launch armor_detector detector.launch.py onnx_enabled:=true onnx_model_path:=/home/xj/Downloads/tiny_resnet.onnx
+# ONNX 参数在 params.yaml 中配置（已默认启用）
+ros2 launch armor_detector detector.launch.py
 ```
 
 ### 6.5 运行时调参
@@ -306,11 +306,25 @@ BGR 图像
 ros2 launch armor_detector detector.launch.py onnx_enabled:=true onnx_model_path:=/home/xj/rm_test/assets/tiny_resnet.onnx
 ```
 
-#### 9.5.5 当前状态
+#### 9.5.5 实测结果
 
-- 检测、配对、ROI 裁剪、ONNX 推理链路已全部打通。
-- `/armor/result` 中每个 armor 的 `digit_label` 和 `confidence` 字段已按上述类别映射填充。
-- 当前 `tiny_resnet.onnx` 对实测 ROI 明显偏向 `not_armor`（置信度 >0.99），因此数字识别准确率尚未验证，需与模型训练方确认训练配置、类别分布及预处理一致性。
+**单图测试（手工裁剪 ROI）：**
+
+32×32 预处理图 `docs/test_input32_0.png` 送入模型：
+```
+[OnnxClassifier] top3: one=0.9982 not_armor=0.0010 three=0.0006
+分类结果: one  置信度=0.9982  label_id=0
+```
+
+**视频流测试（自动裁剪 ROI）：**
+
+`W3/red_5000_output.mp4` 检测到装甲板，自动裁剪 ROI 后分类：
+```
+[OnnxClassifier] top3: not_armor=0.969 one=0.018 base=0.009
+分类结果: not_armor  (置信度 >0.7，digit_label 被抑制)
+```
+
+自动裁剪的 ROI 与手工裁剪存在差异，详见 `docs/failure_cases.md`。
 
 ## 10. Bag / 相机切换步骤
 
@@ -358,17 +372,17 @@ ros2 run armor_detector detector_node --ros-args --params-file install/armor_det
 - 已调整：`max_contour_area` 提高到 `50000.0`，恢复 result 模式输出
 - 后续：拿到标准装甲板后继续确认最终稳定参数
 
-### W7 状态（ONNX 已接入，分类结果待稳定）
+### W7 状态（ONNX 已接入，分类链路跑通，准确率待优化）
 
 - ROI 保存调试接口已加入，默认关闭
-- ROI 已从 `boundingRect` 升级为四点 `warpPerspective` 透视裁剪
+- ROI 裁剪：基于装甲板四点中心取正方形区域（`cropDigitRoi`），边长= bounding box 长边的 60%
 - ROI 调试会同时保存 `roi_*.png` 和模型输入 `roi_*_input32.png`
-- ONNX 数字识别接口已接入（`onnx_classifier.hpp` + `detector_node.cpp` 集成），默认关闭
-- `points` 已改为固定 `std::array<cv::Point2f, 4>`
-- 检测结果已支持同一帧多个装甲板
-- 输出已改为 ROS2 结构化消息 `/armor/result`，类型为 `armor_interfaces/msg/Armors`
-- 已找到模型 `/home/xj/rm_test/assets/tiny_resnet.onnx`，OpenCV DNN 可加载，测试输入 `1×1×32×32`，输出 `1×9`
-- W3 视频验证结果：检测和 ONNX 链路可运行，但 `digit_label` 仍为空，需继续优化四点质量、类别映射或预处理匹配
+- ONNX 数字识别已接入检测链路（`onnx_classifier.hpp` + `detector_node.cpp`），默认启用
+- 检测->裁剪->预处理->ONNX 推理->结果发布全链路跑通
+- `/armor/result` 中 `digit_label`、`confidence` 字段已填充
+- W3 视频验证：red_1000 和 red_5000 均可检测到装甲板，但自动裁剪的 ROI 分类结果均为 `not_armor`
+- 手工裁剪的 `test_input32_0.png` 可正确分类为 `one` (0.9982)
+- 下一步：优化 ROI 裁剪策略（尝试透视变换裁正、调整中心正方形比例等）
 
 ## 12. 运行截图与调试
 

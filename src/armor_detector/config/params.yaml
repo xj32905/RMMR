@@ -43,7 +43,7 @@ camera_node:
   ros__parameters:
     # source_type: mvs = 海康/MVS 工业相机；opencv = 普通UVC摄像头或视频文件
     source_type: "opencv"                       # W7 测试：改成 opencv 用视频文件
-    video_path: "/home/xj/rm_test/W3/red_1000_output1.mp4"  # W3 已有的测试视频
+    video_path: "/home/xj/rm_test/W3/red_5000_output.mp4"  # W3 已有的测试视频
     camera_id: 0
     mvs_index: 0             # 多个 MVS 相机时选择第几个
     mvs_use_gentl: true      # U3V 相机在 Linux 下通常需要 GenTL/cti
