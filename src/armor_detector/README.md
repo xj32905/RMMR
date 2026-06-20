@@ -278,27 +278,27 @@ BGR 图像
 
 #### 9.5.3 ROI 如何从装甲板检测结果中裁出
 
-数字识别 ROI 基于 `Armor.points`（检测到的装甲板四点，顺序：左上→右上→右下→左下），流程如下：
+基于 **装甲板平面几何**（而非 bounding box 底部猜测），从灯条中心直接定义 ROI：
 
-1. **计算装甲板中心**：对四点取平均得到中心点。
-2. **中心正方形裁剪**：以中心点为原点，取长边（四点 bounding box）的 60% 作为边长，从原图裁出中心正方形 ROI。该 ROI 包含完整数字且数字占比较大，避免透视拉正后装甲板过扁导致数字变形或被截断。
+1. **`getArmorRectFromBars(left_bar, right_bar)`**：以左右灯条中心间距为宽、灯条均长为高，构造居中 `cv::Rect2f`。
+2. **居中正方形**：宽 × 1.0，高 × 1.0，中心可垂直偏移（`vertical_bias=0.25`，即向下偏移 25% 高度）。
 3. **灰度转换**：把 BGR ROI 转成单通道灰度。
-4. **等比缩放**：把灰度图长边缩放到 24（保留黑边），短边按比例缩放。
-5. **黑底填充**：将缩放后的 24×? 或 ?×24 图像居中放到 32×32 的黑色画布上。
-6. **归一化 blob**：用 `cv::dnn::blobFromImage(..., 1.0/255.0, ...)` 生成 `[1, 1, 32, 32]` 的 float blob。
+4. **等比缩放 + 黑底填充**：长边等比缩到 24，居中放 32×32 黑色画布。
+5. **归一化 blob**：`cv::dnn::blobFromImage(..., 1.0/255.0, ...)` 生成 `[1, 1, 32, 32]` float blob。
 
-实现位置：`include/armor_detector/onnx_classifier.hpp` 中的 `cropDigitRoi()` 和 `preprocess()`。
+实现位置：`armor_detect_core.hpp` 中的 `getArmorRectFromBars()`；`onnx_classifier.hpp` 中的 `cropDigitRoi()` 和 `preprocess()`。
 
 #### 9.5.4 运行参数
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
-| `roi_debug_save` | true | 保存 ROI 与 `32×32` 输入图，便于继续收集重训样本 |
+| `roi_debug_save` | false | 保存 ROI 与 `32×32` 输入图，便于继续收集重训样本 |
 | `roi_debug_dir` | `src/armor_detector/docs/week7_roi_samples` | ROI 样本输出目录 |
-| `roi_debug_max_count` | 100 | 单次运行最多保存的 ROI 样本数量 |
-| `onnx_enabled` | false | true=启用 ONNX 数字识别 |
+| `roi_debug_max_count` | 20 | 单次运行最多保存的 ROI 样本数量 |
+| `onnx_enabled` | true | true=启用 ONNX 数字识别 |
 | `onnx_model_path` | `/home/xj/rm_test/assets/tiny_resnet.onnx` | `tiny_resnet.onnx` 模型文件路径 |
 | `not_armor_threshold` | 0.7 | 模型输出 `not_armor` 且置信度超过阈值时，该分类结果不写入 `digit_label` |
+| `vertical_bias` | 0.25 | ROI 垂直偏移（h 的倍数），正值=下移。sweep 验证 [-0.1, 0.3] 均稳定 |
 
 启动示例：
 
@@ -308,23 +308,27 @@ ros2 launch armor_detector detector.launch.py onnx_enabled:=true onnx_model_path
 
 #### 9.5.5 实测结果
 
-**单图测试（手工裁剪 ROI）：**
+**视频流测试（Red_5000_input.mp4，居中 ROI，bias=0.25）：**
 
-32×32 预处理图 `docs/test_input32_0.png` 送入模型：
-```
-[OnnxClassifier] top3: one=0.9982 not_armor=0.0010 three=0.0006
-分类结果: one  置信度=0.9982  label_id=0
-```
+| 指标 | 旧方案（底部 35%） | 新方案（居中 ROI） |
+|------|-------------------|--------------------|
+| `three` 命中率 | 11% | **52%** |
+| `three` 最高置信度 | 0.79 | **0.97** |
+| 置信度 ≥0.9 占比 | - | **43%** |
+| 置信度 ≥0.7 占比 | - | **79%** |
+| 幻觉（one/four） | 偶发 | **几乎归零** |
 
-**视频流测试（自动裁剪 ROI）：**
+**ROI 方案演进**（详见 `docs/failure_cases.md`）：
+1. 中心 60% bbox（`three=0.64`，不稳定）
+2. 底部 35% bbox（`three=0.79`，命中率 11%）
+3. **居中装甲平面 ROI**（`three=0.97`，命中率 52%）← 当前
 
-`W3/red_5000_output.mp4` 检测到装甲板，自动裁剪 ROI 后分类：
-```
-[OnnxClassifier] top3: not_armor=0.969 one=0.018 base=0.009
-分类结果: not_armor  (置信度 >0.7，digit_label 被抑制)
-```
-
-自动裁剪的 ROI 与手工裁剪存在差异，详见 `docs/failure_cases.md`。
+**关键发现：**
+- 原视频 `red_5000_output.mp4` 经压缩破坏了数字细节，导致模型无法识别
+- 使用原始输入视频 `Red_5000_input.mp4` 后分类正常
+- 居中 ROI 基于灯条中心间距和长度，比 bbox 底部裁剪更稳定
+- `vertical_bias` 在 [-0.1, 0.3] 范围内均稳定（51-52%），鲁棒性好
+- 剩余 48% `not_armor` 帧为装甲板转至不利角度时数字不可见
 
 ## 10. Bag / 相机切换步骤
 
@@ -372,17 +376,17 @@ ros2 run armor_detector detector_node --ros-args --params-file install/armor_det
 - 已调整：`max_contour_area` 提高到 `50000.0`，恢复 result 模式输出
 - 后续：拿到标准装甲板后继续确认最终稳定参数
 
-### W7 状态（ONNX 已接入，分类链路跑通，准确率待优化）
+### W7 状态（已完成，居中 ROI 方案稳定运行）
 
-- ROI 保存调试接口已加入，默认关闭
-- ROI 裁剪：基于装甲板四点中心取正方形区域（`cropDigitRoi`），边长= bounding box 长边的 60%
-- ROI 调试会同时保存 `roi_*.png` 和模型输入 `roi_*_input32.png`
-- ONNX 数字识别已接入检测链路（`onnx_classifier.hpp` + `detector_node.cpp`），默认启用
-- 检测->裁剪->预处理->ONNX 推理->结果发布全链路跑通
+- ROI 裁剪：基于灯条中心间距和均长的居中矩形（`getArmorRectFromBars` + `cropDigitRoi`），宽 1.0x，高 1.0x，垂直偏移 0.25h
+- 灯条配对：贪心匹配，每个灯条至多参与一次配对，按综合评分排序
+- ONNX 数字识别已接入检测链路，默认启用，全链路跑通
 - `/armor/result` 中 `digit_label`、`confidence` 字段已填充
-- W3 视频验证：red_1000 和 red_5000 均可检测到装甲板，但自动裁剪的 ROI 分类结果均为 `not_armor`
-- 手工裁剪的 `test_input32_0.png` 可正确分类为 `one` (0.9982)
-- 下一步：优化 ROI 裁剪策略（尝试透视变换裁正、调整中心正方形比例等）
+- 时间滤波：5 帧历史、2 票多数，仅正向覆盖（不反向压制正确分类）
+- 低置信度抑制：非 `not_armor` 且置信度 <0.45 时压制，`not_armor` 由专属阈值 (0.7) 控制
+- `Red_5000_input.mp4` 实测：`three` 命中率 52%，最高置信度 0.97
+- 标注结果图：`docs/w7_result_success_1/2.png`（`red_three` 标注 + 检测框）
+- 完成错误样例分析（`docs/failure_cases.md`），包含 ROI 方案演进记录
 
 ## 12. 运行截图与调试
 
