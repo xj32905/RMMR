@@ -46,3 +46,15 @@ image_pub.py.*
 W4/Screenshot*.png
 W4/detector_node.cpp
 W4/*.zip
+# W7 辅助脚本和文档（本地保留）
+src/armor_detector/scripts/count_digit_dataset.py
+src/armor_detector/scripts/export_roi_stages.py
+src/armor_detector/scripts/make_digit_contact_sheet.py
+src/armor_detector/scripts/prepare_digit_dataset.py
+src/armor_detector/scripts/publish_single_image.py
+src/armor_detector/scripts/test_onnx_preprocess_variants.py
+src/armor_detector/config/w7_roi_collection.yaml
+src/armor_detector/docs/week7_error_analysis.md
+src/armor_detector/docs/week7_next_steps.md
+src/armor_detector/docs/week7_retrain_prepare.md
+src/armor_detector/docs/W7_defense.md
